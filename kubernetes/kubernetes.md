@@ -1,9 +1,5 @@
 # Kubernetes
 
-- Are you using Karpenter or the traditional config?
-- What is the team consistency/dynamic?
-- Where do you need the most help?
-
 ## Overview
 
 ### Node Components 
