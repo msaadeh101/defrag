@@ -1,0 +1,17 @@
+FROM node:14
+
+# Set /app as the working dir in the container
+WORKDIR /app
+
+COPY server.js .
+COPY index.html .
+COPY packages.json .
+
+# Runs inside the container to install Node.js dependencies
+RUN npm install
+
+# The container will listen on port 3000
+EXPOSE 3000
+
+# Start the Node.js server
+CMD ["node", "server.js"]
