@@ -130,6 +130,46 @@ RUN apt-get update && \
 - Quick command reference for daily use
 - Examples with flags and options
 
+```bash
+# View all containers (including stopped)
+docker ps -a
+# Check exit code
+docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.ExitCode}}"
+# Test connection between containers
+docker exec container1 ping container2
+# Check DNS resolution
+docker exec container1 nslookup container2
+# Test external connectivity
+docker exec container1 curl -I https://google.com
+# Use netcat for port testing
+docker exec container1 nc -zv container2 3306
+# Install network tools in container
+docker exec -it container_name bash
+apt-get update && apt-get install -y iputils-ping dnsutils netcat curl
+###
+# View network configuration
+docker exec container_name ip addr show
+docker exec container_name netstat -tulpn
+# Check Docker disk usage
+docker system df
+# Find large containers/images
+docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | sort -k 3 -h
+# Clean up space
+docker system prune -a --volumes
+# Real-time resource monitoring
+docker stats
+# Check container processes
+docker top container_name
+# View system events
+docker events --filter container=container_name
+# Check memory usage inside container
+docker exec container_name cat /proc/meminfo
+# Check CPU usage
+docker exec container_name top
+# View container limits
+docker inspect container_name | grep -A 5 Memory
+```
+
 ## Troubleshooting
 - Debugging container startup issues
 - Inspecting logs and events
