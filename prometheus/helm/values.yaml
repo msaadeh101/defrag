@@ -1,0 +1,23 @@
+prometheus:
+  prometheusSpec:
+    replicas: 2  # High availability
+    retention: "6h"  # Short-term storage in Prometheus
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+    thanos:
+      objectStorageConfig:
+        name: thanos-objstore-secret
+        key: objstore.yml
+    thanosRuler:
+      enabled: true
+      alertmanagers:
+        - static_configs:
+          - "alertmanager.monitoring.svc.cluster.local:9093"
+
+# helm upgrade --install prometheus prometheus-community/kube-prometheus-stack -n monitoring -f values.yaml
+

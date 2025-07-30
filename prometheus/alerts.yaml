@@ -1,0 +1,16 @@
+groups: # Defines a list of rule groups, each group contains multiple rules.
+  - name: node-alerts
+    rules:
+      - alert: HighCPUUsage # Trigger if CPU usage >80% for 2 min
+        expr: (100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) *100)) > 80
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+  - name: example-rule # https://prometheus.io/docs/practices/rules/
+    rules: # record allows you to store as a new time series
+      - record: job:request_duration_seconds:avg5m # creates a new time series with this name
+        expr: avg(rate(http_request_duration_seconds_sum[5m])) # stored in above
+        # improves query performance and reduces load
+  

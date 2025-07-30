@@ -1,0 +1,53 @@
+name: Couchbase Integration
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  retrieve-secrets:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Retrieve Secrets from Azure Key Vault
+        id: keyvault
+        run: |
+          COUCHBASE_HOST=$(az keyvault secret show --name "COUCHBASE-HOST" --vault-name "my-keyvault" --query "value" -o tsv)
+          USERNAME=$(az keyvault secret show --name "COUCHBASE-USERNAME" --vault-name "my-keyvault" --query "value" -o tsv)
+          PASSWORD=$(az keyvault secret show --name "COUCHBASE-PASSWORD" --vault-name "my-keyvault" --query "value" -o tsv)
+          BUCKET_NAME=$(az keyvault secret show --name "COUCHBASE-BUCKET" --vault-name "my-keyvault" --query "value" -o tsv)
+
+          # Mask sensitive values
+          echo "::add-mask::$PASSWORD"
+
+          # Set GitHub Actions outputs
+          echo "COUCHBASE_HOST=$COUCHBASE_HOST" >> $GITHUB_ENV
+          echo "USERNAME=$USERNAME" >> $GITHUB_ENV
+          echo "PASSWORD=$PASSWORD" >> $GITHUB_ENV
+          echo "BUCKET_NAME=$BUCKET_NAME" >> $GITHUB_ENV
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: pip install couchbase
+
+      - name: Run Python Script with Secrets
+        run: python scripts/couchbase_pipeline.py

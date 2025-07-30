@@ -1,0 +1,55 @@
+global: # Controls Prometheus server GLOBAL configuration.
+  scrape_interval: 15s  # How often to scrape targets (default is 1m)
+  evaluation_interval: 15s  # How often to evaluate alerting and recording rules
+  # Prometheus uses rules to create new time series and generate alerts.
+
+rule_files:
+  # - "one_rule.rules"
+
+
+# scrape configs controls what resources Prometheus will monitor.
+scrape_configs:
+  # 1. Scrape Kubernetes Nodes (Node Exporter metrics)
+  - job_name: 'kubernetes-nodes'  
+    kubernetes_sd_configs: # SD stands for Service Discovery
+      - role: node  # Discover Kubernetes nodes automatically
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_node_name]
+        action: replace
+        target_label: instance  # Rename the node label for clarity
+
+  # 2. Scrape Kubernetes Pods (Application metrics)
+  - job_name: 'kubernetes-pods'
+    kubernetes_sd_configs:
+      - role: pod  # Discover all running pods
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: instance  # Rename the pod label for clarity
+
+  # 3. Scrape kubelet (Kubernetes node agent)
+  - job_name: 'kubelet'
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: node  # Discover nodes running kubelet
+    scheme: https  # Kubelet exposes metrics over HTTPS
+    tls_config:
+      insecure_skip_verify: true  # Skip TLS verification (use only for testing)
+
+  # 4. Monitor Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']  # Prometheus runs on port 9090
+
+  # 5. Scrape cAdvisor (Container metrics)
+  - job_name: 'cAdvisor'
+    static_configs:
+      - targets: ['cadvisor.monitoring.svc.cluster.local:8080']
+        # cAdvisor helps collect container CPU, memory, and network usage
+
+  # 6. Scrape Node Exporter (Host-level metrics)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter.monitoring.svc.cluster.local:9100']
+        # Node Exporter provides OS-level metrics like CPU, memory, disk usage
+

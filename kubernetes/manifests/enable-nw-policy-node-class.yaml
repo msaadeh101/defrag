@@ -1,0 +1,10 @@
+apiVersion: eks.amazonaws.com/v1
+kind: NodeClass
+metadata:
+  name: network-policy-enabled
+spec:
+  # Enables network policy support
+  networkPolicy: DefaultAllow
+  # Optional: Enables logging for network policy events
+  networkPolicyEventLogs: Enabled
+  # Include other Node Class configurations as needed

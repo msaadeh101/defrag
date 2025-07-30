@@ -1,0 +1,31 @@
+# Build Stage
+FROM node:14-alpine AS builder
+
+# ARG is only available at build time
+ARG NODE_ENV=production
+# ENV makes it available in your app
+ENV NODE_ENV=$NODE_ENV
+
+WORKDIR /app
+
+COPY package*.json ./
+
+# Shell conditional statement inside Dockerfile RUN command
+RUN if [ "$NODE_ENV" = "development" ]; then npm install; else npm install --production; fi && \
+    npm cache clean --force
+
+# Copy multiple files at once to the same DEST
+COPY server.js index.html .
+
+# Production Stage
+FROM node:14-alpine
+
+WORKDIR /app
+
+# Copy from builder context
+# /app is the source path inside the builder stage file system (line 4)
+COPY --from=builder /app .
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]
