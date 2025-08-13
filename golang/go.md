@@ -479,3 +479,26 @@ go mod tidy
 go test -bench . -benchman
 go tool pprof cpu.prof
 ```
+
+## Concepts
+
+### Pub/Sub
+
+- Publish-Subscribe is a message pattern where:
+    - Publishers send messages (events) to a broker without knowing who will receive them.
+    - Subscribers registers interest in specific events and get notified without knowing who sent.
+
+- Publishers and Subscribers do not message each other, instead they use **Channels**.
+    - `Channels` deliver messages between goroutines.
+    - **Maps of subscriber channels** keep track of who is listening.
+    - `sync.Mutex` / `sync.RWMutex` safely manage concurrent access to subscribers.
+    - `context.Context` to handle cancellations and timeouts for subscriptions.
+
+```text
+Time →
+1. Create a Broker that holds subscriber channels.
+2. A subscriber calls Subscribe() and gets a channel.
+3. A publisher calls Publish() to send messages to all subscribers.
+4. Subscribers receive messages through their channels.
+5. On shutdown, all subscriber channels are closed.
+```

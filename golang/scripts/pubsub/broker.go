@@ -69,10 +69,12 @@ func (b *Broker[T]) Subscribe(ctx context.Context) <-chan Event[T] {
 }
 
 // Publish sends an event to all current subscribers.
+// Two operations: 1. read subscriber map to find channels, 2. write to channels (send events)
 // Non-blocking: if a subscriber's channel is full, the event is dropped.
 func (b *Broker[T]) Publish(evt Event[T]) {
-	b.mu.RLock()
+	b.mu.RLock() // Reader lock for concurrent safety, RLock because only reading subs map
 	defer b.mu.RUnlock()
+	// Defer ensures the unlock happens when function exits always
 
 	for ch := range b.subs {
 		select {
@@ -105,18 +107,21 @@ func (b *Broker[T]) Shutdown() {
 // Example usage of the generic pub/sub broker
 func main() {
 	broker := NewBroker[string]() // Broker for string events
+	// starts with empty subscriber map and open done channel
 
-	// Subscriber 1
+	// Create Subscriber 1
 	ctx1, cancel1 := context.WithCancel(context.Background())
-	sub1 := broker.Subscribe(ctx1)
+	// context.WithCancel() creates cancellable context + cancel function
+	sub1 := broker.Subscribe(ctx1) // returns a receive-only channel
 
-	// Subscriber 2
+	// Create Subscriber 2
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	sub2 := broker.Subscribe(ctx2)
 
-	// Publish messages
+	// Publish messages to both subscriber channels
 	broker.Publish(Event[string]{Data: "Hello, Subscribers!"})
 	broker.Publish(Event[string]{Data: "Go is awesome"})
+	// both subscribers receive both the messages
 
 	// Read messages (in a real program, you'd use goroutines)
 	go func() {
@@ -138,3 +143,9 @@ func main() {
 	cancel2()
 	broker.Shutdown()
 }
+
+// Output:
+// Sub1 received: Hello, Subscribers!
+// Sub1 received: Go is awesome
+// Sub2 received: Hello, Subscribers!  
+// Sub2 received: Go is awesome
