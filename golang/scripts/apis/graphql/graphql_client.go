@@ -23,6 +23,7 @@ func main() {
 	url := "http://localhost:4000/graphql" // Localhost skips https
 
 	// GraphQL query with a variable placeholder ($id)
+	// multi-line raw string literal in Go denoted by ``, keeps tabs, newlines, quotes exactly
 	query := `
 		query ($id: ID!) {
 			user(id: $id) {
