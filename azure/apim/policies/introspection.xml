@@ -1,0 +1,27 @@
+<policies>
+    <inbound>
+        <base />
+        <choose>
+            <when condition="@(context.Request.Method == "POST" && context.Request.Headers.ContainsKey("Content-Type") && context.Request.Headers["Content-Type"].Contains("application/json"))">
+                <choose>
+                    <when condition='@(context.Request.Body.As<JObject>(preserveContent: true)?["query"]?.ToString()?.Contains("__schema") == true || 
+                                      context.Request.Body.As<JObject>(preserveContent: true)?["query"]?.ToString()?.Contains("__type") == true)'>
+                        <return-response>
+                            <set-status code="403" reason="Forbidden" />
+                            <set-body>{"error": "GraphQL introspection is disabled"}</set-body>
+                        </return-response>
+                    </when>
+                </choose>
+            </when>
+        </choose>
+    </inbound>
+    <backend>
+        <base />
+    </backend>
+    <outbound>
+        <base />
+    </outbound>
+    <on-error>
+        <base />
+    </on-error>
+</policies>
