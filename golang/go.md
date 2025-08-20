@@ -480,6 +480,89 @@ go test -bench . -benchman
 go tool pprof cpu.prof
 ```
 
+## Testing
+
+- Go has built-in testing support via the testing package. Test files must end with _test.go and test functions must start with Test followed by a capitalized name.
+
+```go
+package main
+
+import "testing"
+
+func TestAdd(t *testing.T) {
+    result := Add(2, 3)
+    expected := 5
+    if result != expected {
+        t.Errorf("Add(2, 3) = %d; want %d", result, expected)
+    }
+}
+```
+
+- **Running Tests**:
+    - `go test`
+    - `go test ./...`
+    - `go test -cover`
+    - `go test -bench .`
+
+- **Test Function Signatures**:
+    - Unit tests: `func TestXxx(t *testing.T)`
+    - Benchmarks: `func BenchmarkXxx(b *testing.B)`
+    - Examples: `func ExampleXxx()`
+
+
+- Table Driven Test:
+
+```go
+import "testing"
+
+func TestAdd(t *testing.T) {
+    tests := []struct {
+        name string
+        a, b int
+        want int
+    }{
+        {"positive numbers", 2, 3, 5}, // name = positive numbers, a, b = 2,3, want = 5
+        {"with zero", 0, 5, 5},
+        {"negative numbers", -2, -3, -5},
+    }
+    
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            if got := Add(tt.a, tt.b); got != tt.want { // check if got is != want
+                t.Errorf("Add(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.want)
+            }
+        })
+    }
+}
+```
+
+- **Key Testing Methods**:
+    - `t.Error()`, `t.Errorf()`
+    - `t.Fatal()`, `t.Fatalf()`
+    - `t.Skip()`, `t.Skipf()`
+    - `t.Parallel()`
+    - `t.Run()`
+
+```go
+// TestMain for package-level setup and teardown
+func TestMain(m *testing.M) {
+    // setup
+    code := m.Run() // run tests
+    // teardown
+    os.Exit(code)
+}
+
+// Benchmarking
+func BenchmarkAdd(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        Add(2, 3)
+    }
+}
+```
+
+- Consider using `testify` package for testing.
+- Place alongside code you are testing.
+
 ## Concepts
 
 ### Pub/Sub
