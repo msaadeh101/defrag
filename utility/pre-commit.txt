@@ -4,7 +4,7 @@
 # This script should be placed in .git/hooks/pre-commit and made executable
 
 # Configuration - Edit these variables to customize the hook
-# =============================================================
+# ==============================================================
 
 # Keywords to block (case-insensitive)
 BLOCKED_KEYWORDS=(
