@@ -1,138 +1,16 @@
-pipeline{
-    agent{
-        label "my-agent123" // job will be queued until agent with this label is found
-    }
-    environment {
-        DOCKER_REGISTRY = "mydockerregistry.azurecr.io"
-        IMAGE_NAME = "myapp"
-        IMAGE_TAG = "${env.BUILD_ID}"
-        AKS_CLUSTER_NAME = "myAKSCluster"
-        AKS_RESOURCE_GROUP = "myResourceGroup"
-        NAMESPACE = "default"
-        KUBECONFIG = "/tmp/kubeconfig"  // Assuming the Kube config is available as a secret
-        TEAMS_WEBHOOK_URL = credentials('teams-webhook-url') // Teams webhook URL stored as a secret
-        EMAIL_RECIPIENTS = "team@example.com"
-        AZURE_CREDENTIALS = credentials('azure-credentials') // Azure service principal credentials
-    }
+@Library('lib') _
 
-    stages {
-        stage('Checkout Code') {
-            steps {
-                checkout scm
-            }
-        }
-
-        stage('Build Docker Image') {
-            steps {
-                script {
-                    echo "Building Docker image..."
-                    sh """
-                        docker build -t ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} .
-                    """
-                }
-            }
-        }
-
-        stage('Login to Azure Container Registry') {
-            steps {
-                script {
-                    echo "Logging in to Azure Container Registry..."
-                    withCredentials([azureServicePrincipal(credentialsId: 'azure-credentials', subscriptionIdVariable: 'AZURE_SUBSCRIPTION_ID', clientIdVariable: 'AZURE_CLIENT_ID', clientSecretVariable: 'AZURE_CLIENT_SECRET', tenantIdVariable: 'AZURE_TENANT_ID')]) {
-                        sh """
-                            az acr login --name ${DOCKER_REGISTRY}
-                        """
-                    }
-                }
-            }
-        }
-
-        stage('Push Docker Image') {
-            steps {
-                script {
-                    echo "Pushing Docker image to ACR..."
-                    sh """
-                        docker push ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                    """
-                }
-            }
-        }
-
-        stage('Deploy to AKS') {
-            steps {
-                script {
-                    echo "Deploying to AKS..."
-                    withCredentials([file(credentialsId: 'aks-kubeconfig', variable: 'KUBECONFIG')]) {
-                        sh """
-                            kubectl --kubeconfig=${KUBECONFIG} apply -f k8s/deployment.yaml
-                            kubectl --kubeconfig=${KUBECONFIG} set image deployment/myapp myapp=${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} -n ${NAMESPACE}
-                            kubectl --kubeconfig=${KUBECONFIG} rollout status deployment/myapp -n ${NAMESPACE}
-                        """
-                    }
-                }
-            }
-        }
-
-        stage('Verify Deployment') {
-            steps {
-                script {
-                    echo "Verifying deployment..."
-                    withCredentials([file(credentialsId: 'aks-kubeconfig', variable: 'KUBECONFIG')]) {
-                        sh """
-                            kubectl --kubeconfig=${KUBECONFIG} get pods -n ${NAMESPACE}
-                            kubectl --kubeconfig=${KUBECONFIG} get services -n ${NAMESPACE}
-                        """
-                    }
-                }
-            }
-        }
-    }
-
-    post {
-        always {
-            echo "Cleaning up resources..."
-            // Add any resource cleanup steps if needed
-            sh 'docker system prune -f'
-        }
-
-        success {
-            script {
-                echo "Deployment successful, notifying team and sending email..."
-                // Teams Webhook Notification
-                httpRequest(
-                    url: "${TEAMS_WEBHOOK_URL}",
-                    httpMode: 'POST',
-                    contentType: 'APPLICATION_JSON',
-                    body: """
-                    {
-                        "text": "Deployment successful for ${IMAGE_NAME}:${IMAGE_TAG} on AKS"
-                    }
-                    """
-                )
-            }
-        }
-
-        failure {
-            script {
-                echo "Deployment failed, notifying team and sending email..."
-                // Teams Webhook Notification for failure
-                httpRequest(
-                    url: "${TEAMS_WEBHOOK_URL}",
-                    httpMode: 'POST',
-                    contentType: 'APPLICATION_JSON',
-                    body: """
-                    {
-                        "text": "Deployment failed for ${IMAGE_NAME}:${IMAGE_TAG} on AKS"
-                    }
-                    """
-                )
-
-                // Sending an email notification using Jenkins Email plugin
-                emailext(
-                    subject: "Build failed: ${JOB_NAME} - Build #${BUILD_NUMBER}",
-                    body: "The build ${JOB_NAME} - Build #${BUILD_NUMBER} failed. Please check the Jenkins console for details.",
-                    to: "${EMAIL_RECIPIENTS}"
-                )
-            }
-        }
-    }
-}
+// This Jenkinsfile configures and triggers the shared library pipeline.
+// All heavy lifting is handled in vars/aksDeploymentPipeline.groovy
+aksDeploymentPipeline(
+    agentLabel:       "linux-agent-prod",
+    dockerRegistry:   "mydockerregistry.azurecr.io",
+    imageName:        "myapp",
+    aksClusterName:   "prod-aks-cluster",
+    aksResourceGroup: "prod-aks-rg",
+    namespace:        "default",
+    teamsWebhookCred: "teams-webhook-url",   // Jenkins secret ID
+    emailRecipients:  "devops-team@example.com",
+    azureCredId:      "azure-service-principal", // Jenkins secret ID
+    kubeconfigCredId: "aks-kubeconfig"       // Jenkins secret ID
+)
