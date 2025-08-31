@@ -221,7 +221,7 @@ check_for_secrets() {
 }
 
 # Main execution
-# ==============
+# ================
 
 print_header
 
