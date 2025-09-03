@@ -1,0 +1,12 @@
+region                      = "us-west-1"
+environment                = "production"
+project_name               = "webapp"
+vpc_cidr                   = "10.0.0.0/16"
+vswitch_cidrs              = ["10.0.1.0/24", "10.0.2.0/24"]
+instance_type              = "ecs.t6-c1m1.large"
+instance_count             = 2
+system_disk_size           = 40
+internet_max_bandwidth_out = 100
+allowed_ssh_cidrs          = ["203.0.113.0/24"]  # Replace with your IP range
+enable_monitoring          = true
+backup_retention_days      = 7
