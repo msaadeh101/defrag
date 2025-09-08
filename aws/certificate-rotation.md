@@ -1,4 +1,90 @@
-# Rotating EKS Certificates
+# Rotating Certificates
+
+## NGINX
+
+Steps for rotating a certificate in NGINX to secure HTTPS traffic without causing downtime or requiring a full server restart involve replacing the current cert and its private key with a new one.
+
+0. Prerequisites:
+- SSH access to EC2
+- Root/sudo priveleges
+- The new cert + private key (From ACM/let's encrypt or another CA)
+
+1. Connect to EC2 instance.
+
+```bash
+ssh -i your-key.pem ec2-user@<EC2_PUBLIC_IP>
+```
+
+2. Locate your existing certificate files (usually `/etc/nginx/sites-enabled/` `/etc/nginx/conf.d/`)
+
+```bash
+sudo grep -i ssl_certificate /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*
+
+```
+
+Typical entries:
+
+```nginx
+ssl_certificate     /etc/ssl/certs/yourdomain.crt;
+ssl_certificate_key /etc/ssl/private/yourdomain.key;
+```
+
+3. Upload or create the new cert and key
+
+- For Certbot and nginx plugin.
+```bash
+sudo amazon-linux-extras enable epel
+sudo yum install -y certbot python2-certbot-nginx   # Amazon Linux 2
+# or
+sudo apt-get install -y certbot python3-certbot-nginx   # Ubuntu/Debian
+```
+
+- Place them in `/etc/ssl/certs/yourdomain_new.crt` and `/etc/ssl/private/yourdomain_new.key`
+
+OR use Let's Encrypt which automatically generates and places certs in `/etc/letsencrypt/live/yourdomain.com`
+
+```bash
+sudo certbot certonly --nginx -d yourdomain.com -d www.yourdomain.com
+```
+
+4. Update your NGINX config
+
+```bash
+sudo nano /etc/nginx/sites-enabled/your-site.conf
+```
+
+- Update to the below:
+
+```nginx
+ssl_certificate     /etc/ssl/certs/yourdomain_new.crt;
+ssl_certificate_key /etc/ssl/private/yourdomain_new.key;
+```
+
+5. Test, Reload, Verify
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+- From your local machine:
+
+```bash
+openssl s_client -connect yourdomain.com:443 -servername yourdomain.com
+```
+
+6. Automate Renewal (Let's encrypt)
+
+```bash
+sudo systemctl enable certbot.timer
+sudo systemctl start certbot.timer
+```
+
+### Best Practices
+- Keep Certs/Keys owned by `root:root` with `600` perms for private key.
+- Always test in lower environments.
+
+## EKS
 
 Cert-manager is a native K8 tool that automates the management and issuance of TLS certs. It automatically requests new certificates and stores them in K8.
 
