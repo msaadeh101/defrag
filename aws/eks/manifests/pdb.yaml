@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: myapp-pdb
+  namespace: myapp
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: myapp
+# PDB works to combat voluntary disruptions like human/automation initiated disruptions
+# PDB will intervene with kubectl drain node, or if cluster autoscaler drains node

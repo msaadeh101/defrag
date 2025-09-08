@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: myapp-netpol
+  namespace: myapp
+spec:
+  podSelector:
+    matchLabels:
+      app: myapp
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - namespaceSelector:
+        matchLabels:
+          name: aws-load-balancer-webhook
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  - {} # Allow all egress traffic
+# Network policy controls how pods can communicate with each other
+# Ingress is the most restrictive part of the policy
+# from: allows traffic from any pod in kube-system (CoreDNS, etc)
+# aws-load-balancer-webhook is the external traffic allowance
