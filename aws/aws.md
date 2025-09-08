@@ -286,6 +286,57 @@ resource "aws_cloudwatch_log_group" "eks_app" {
 }
 ```
 
+### Load Balancing
+
+1. **Application Load Balancer (ALB)**:
+- Layer 7, best for HTTPS traffic and advanced routing based on URL paths, hostnames, query params.
+- Supports WebSockets, HTTP/2 SSL/TLS offloading.
+- Microservices, containerized applications, web applications with complex routing.
+2. **Network Load Balancer (NLB)**:
+- Operates at layer 4 (transport layer).
+- Handles millions of requests at low latency.
+- Provides a static IP per availability zone, supports TCP/UDP traffic.
+- Preserves client IP addresses.
+3. **Gateway Load Balancer (GWLB)**:
+- Operates at layer 3 (network layer).
+- Deploy, scale and manage virtual appliances.
+4. **Classic Load Balancer (CLB)**:
+- Legacy option, operates at layer 4 and layer 7.
+- Basic load balancing for HTTP/S/TCP
+
+**Best practices for AWS LBs**:
+- Enable cross-zone load balancing to evenly distribute traffic across targets in multiple AZs.
+- Use HTTPS/SSL with TLS offloading to improve security and lessen load on backend servers.
+- Use autoscaling with your load balancer to dynamically adjust backend instances based on traffic demand, optimizing cost/performance.
+- Use CloudWatch metrics and enable anomaly detection for early alerts.
+
+**ALB with ECS**:
+1. Each service (orders-service) is associated with a target group.
+2. Tasks (containers) in that service are automatically registered/deregistered from the target group as they scale.
+3. ALB listener rule routes traffic based on host/path to correct target group.
+
+```yaml
+ALB: my-app-alb
+Listener 443: HTTPS
+  Rule: Host = orders.example.com → TargetGroup: orders-service-tg
+  Rule: Host = users.example.com → TargetGroup: users-service-tg
+```
+
+**ALB with EKS**
+1. You don't assign an ALB directly, you use AWS Load Balancer Controller.
+2. Define an Ingress resource in Kubernetes.
+3. The controller:
+- Provisions the ALB with listener on 443.
+- Creates listeners and rules.
+- Maps your K8 sercice -> ALB Target Group.
+- Registers EKS pods dynamically as targets.
+
+| Feature             | ECS                                              | EKS                                        |
+| ------------------- | ------------------------------------------------ | ------------------------------------------ |
+| How ALB is attached | Directly in ECS service definition               | Via AWS Load Balancer Controller (Ingress) |
+| Target registration | ECS tasks auto-register                          | K8s pods auto-register                     |
+| Routing rules       | Listener rules tied to ECS service target groups | Defined in Kubernetes Ingress              |
+
 
 ## Azure to AWS
 
