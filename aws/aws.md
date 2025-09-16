@@ -2,6 +2,94 @@
 
 ## Best Practices
 
+### EC2 Instances and Logging In
+
+1. Prerequisites:
+- Key Pair (`.pem` file) or SSM Session Manager access.
+  - Never retreivable again after download, secure in a vault or secret manager.
+  - SSM Session Manager requires the SSM agent + IAM role on instance + VPC endpoints (if no internet).
+- Private IP (if inside network) or Public IP/DNS (external).
+  - Inside network: Use Private IP (no NAT/IGW hop).
+  - External laptop: Use Public DNS or Elastic IP (requires IGW/NAT, SG rules)
+- Correct IAM permissions to describe instances, use SSM or download key pairs.
+- Installed SSH client (ssh for Mac/Linux, PuTTY or PowerShell for Windows).
+- Network access: Security Groups (SGs) and NACL/Route Table configured.
+  - SGs are stateful, inbound 22 must be open from source, outbound must allow `>1024` for responses.
+  - NACLs are stateless, must allow inbound/outbound explicitly. Check if experiencing timeout.
+  - Route Tables:
+    - Public subnet -> IGW route (`0.0.0.0/0` -> `igw-xxxxx`)
+    - Private subnet (Workspaces or VPN) -> routes via VPC peering, TGW, or internal routing.
+
+2. IAM Permissions: You or Workspace user needs an IAM policy that allows EC2/SSM actions. Add IAM conditions to restrict by (`aws:SourceIp`, `aws:ResourceTag`) for zero-trust.
+
+```yaml
+Version: "2012-10-17"
+Statement:
+  - Effect: Allow
+    Action:
+      - ec2:DescribeInstances
+      - ec2:DescribeKeyPairs
+      - ec2-instance-connect:SendSSHPublicKey
+      - ssm:StartSession
+      - ssm:SendCommand
+    Resource: arn:aws:ec2:region:account:instance/*
+```
+
+3. SSH Key Pair setup: When you create an EC2, you associate a Key pair.
+- Download the `.pem` file locally.
+- Set file permissions: `chmod 400 my-key.pem`
+- Example SSH config (`~/.ssh/config`)
+
+```yaml
+Host my-ec2
+  HostName ec2-18-123-45-67.compute-1.amazonaws.com
+  User ec2-user
+  IdentityFile ~/.ssh/my-key.pem
+```
+- Next you can connect: `ssh my-ec2`
+
+4. Logging in from AWS Workspaces
+- Workspaces in the same VPC directly can reach the EC2 using private IP. Ensure the SG of the EC2 allows inbound SSH.
+
+```bash
+ssh -i ~/.ssh/my-key.pem ec2-user@10.0.2.45
+```
+
+5. Networking Checklist
+- Security Groups should allow Inbound TCP on port 22 from your IP.
+- NACLs should allow inbound/outbound TCP 22.
+- Route Table: Internet Gateway or VPC Peering/Private subnet routing.
+
+6. Alternative using AWS SSM (No SSH keys needed).
+
+```bash
+aws ssm start-session --target i-1234567890abcdef
+```
+
+- IAM Role attached to instance:
+
+```yaml
+Version: "2012-10-17"
+Statement:
+  - Effect: Allow
+    Action:
+      - ssm:*
+      - ec2messages:*
+      - cloudwatch:PutMetricData
+    Resource: "*"
+```
+
+7. Troubleshooting
+- Permission denied (public key): Username may vary by AMI, wrong .pem file, permissions.
+- SG/NACL disallowing or no route.
+- Key Lost: Use SSM Session manager or stop instance, detach root volume, attach to another instance and fix `~/.ssh/authorized keys`
+
+8. Best Practices
+- Use SSM Session Manager for auditing and no key managment.
+- Rotate keys regularly.
+- Consider a jump box or bastion host for many private instances.
+- Store SSH configs in`~/.ssh/config`
+
 ### EKS and Secrets
 - AWS EKS supports IRSA, bridges Kubernetes RBAC and AWS IAM using OIDC trust relationships.
 
@@ -13,6 +101,12 @@
           "oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED1234:sub": "system:serviceaccount:default:s3-reader"
         }
 ```
+
+- `"oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED1234:sub"` is the fully qualified OIDC provider URL.
+  - `EXAMPLED1234` is the unique ID for your EKS cluster's OIDC identity provider.
+- `"system:serviceaccount:default:s3-reader"` is the K8 SA identity.
+  - `system:serviceaccount:<namespace>:<serviceaccount-name>` where namespace is `default` and SA is `s3-reader`
+- This ensures that only the s3-reader SA in the default namespace can assume that IAM role.
 
 - Lock `sub` to a sepcific namespace and SA for security.
 - Use `StringLike` with `system:serviceaccount:*:s3-reader` if multiple namespaces sare the same role.
@@ -60,22 +154,49 @@ aws secretsmanager create-secret \
 ### Data Services
 
 **DynamoDB**:
-- NoSQL Key-Value/Document Store
-- On-demand (pay per request) vs Provisioned capacity (pre-allocate, cheaper for steady traffic).
-- Conflict Resolution is last-writer-wins.
-- DynamoDB Streams: Change Data Capture (CDC) for Lambda, Kinesis, etc.
-- DAX: DynamoDB accelerator for caching. In-memory cache for microsecond reads.
-- PTR: Point-in-time recovery for backups.
-- Streams, DAX, and backups are billed separately.
+- Fully Managed NoSQL Key-Value + Document Store
+- **Capacity Modes**:
+  - **On-demand**: autoscales throughput, pay per request (good for unpredictable workloads).
+  - **Provisioned**: preallocate `RCU`/`WCU` (read/write capacity units). Use Auto scaling to adjust dynamically.
+- **Conflict Resolution** is last-writer-wins based on timestamp. For multi-region Global Tables, replication conflicts follow this rule.
+- **Features**:
+  - **DynamoDB Streams**: Change Data Capture (CDC). Triggers Lambda/Kineses -> good for event-driven designs.
+  - **DAX**: DynamoDB accelerator for caching. In-memory cache for microsecond latency for write-through/read-through.
+  - **PITR**: Point-in-time recovery for backups.
+  - **Global Tables**: multi region, active-active replication. Sub-second cross-region replication.
+- **Billing**:
+  - Streams, DAX, PITR are billed separately.
+  - Hot partitions (from uneven key distribution) -> throttle costs and latency. Use composite partition keys (`userId#timestamp`)
+
+```yaml
+Version: "2012-10-17"
+Statement:
+  - Effect: Allow
+    Action:
+      - dynamodb:GetItem
+      - dynamodb:PutItem
+      - dynamodb:Query
+      - dynamodb:UpdateItem
+    Resource: arn:aws:dynamodb:us-east-1:123456789012:table/MyAppTable
+```
 
 **RDS**:
-- MySQL, PostgreSQL, MariaDB, Oracle, SQL Server.
-- Storage automatically grows up to max limit.
-- Use IAM tokens for authentication.
-- Always enable multi-AZ deployments, synchronous replication -> Standby in a different AZ.
-- Use read replicas for scale-out reads.
-- Rotate passwords with Secrets Manager and Lambda rotation hooks.
-- Compute and Storage billed separately based on instance size and GB/month respectively
+- **Supported Engines**: MySQL, PostgreSQL, MariaDB, Oracle, SQL Server.
+- **Storage**:
+  - Allocated storage does not shrink, but automatically grows up to max limit if Storage Auto Scaling enabled.
+  - Billing for storage (GB/Month) + IOPS
+- **Authentication**:
+  - Supports IAM Database Authentication (short-lived tokens via `rds-db:connect`).
+- **High Availability**:
+  - Multi-AZ: Synchronous replication. Standby in another AZ. Automated failover (< 60s).
+  - Single-AZ: Cheaper and riskier, only daily snapshot backups.
+- **Scaling**:
+  - Vertifcal scaling only (bigger instance sizes).
+  - Use read replicas (async replication) for read scaling, but not HA.
+- **Operational Practices**:
+  - Rotate creds with Secrets Manager and Lambda rotation hooks to auto update the db password.
+  - Monitor with Enahnced Monitoring and CloudWatch Alarms.
+- **Billing**: Compute (instance type), Storage (GB/month), IOPS separately. Backups beyond retention billed.
 
 - IAM policy for RDS IAM Authentication
 ```json
@@ -94,31 +215,68 @@ aws secretsmanager create-secret \
 ```
 
 **Aurora**:
-- Aurora MySQL, Aurora PostgreSQL.
-- I/O is billed separately per request.
-- Aurora Advanced configs:
-    - `Aurora Clusters`: Writer + up to 15 low-latency read replicas (shared distributed storage).
-    - `Aurora Serverless v2`: Autoscaling CUs, pay per second of usage (good for dev/test, spiky)
-    - `Global DB`: Replicates to multiple AWS regions with sub-second lag.
+- **Engines**: Aurora MySQL & Aurora PostgreSQL.
+- **Architecture**: Writer + up to 15 low-latency read replicas. All share distributed, multi-AZ storage layer (6-way replication across 3 AZs).
+- **Scaling**:
+  - **Aurora Serverless v2**: Auto-scales Aurora Capacity Units (`ACU`), billed per second. Good for bursty/spiky workloads.
+  - **Horizontal scaling** via replicas. Aurora supports reader endpoints with load-balancing.
+- **Global Databases**: Cross-region read replicas with sub-second replication lag. Failover is manual (promote replica).
+- **Billing**:
+  - Compute billed per instance/ACU.
+  - I/O billed separately per request (this is often the hidden cost).
+  - Backups and snapshots billed separately after retention.
 
 
-| Database | Managed? | Scaling               | HA  | Global                 | Cost Control         | Best For          |
-| -------- | -------- | --------------------- | --- | ---------------------- | -------------------- | ----------------- |
-| RDS      | Semi     | Vertical only         | Yes | Read Replicas          | \$\$\$ predictable   | Legacy/OLTP       |
-| Aurora   | Yes      | Horizontal/Serverless | Yes | Global DB              | \$\$–\$\$\$          | Cloud-native apps |
-| DynamoDB | Yes      | Infinite              | Yes | Global Tables          | \$ (pay per request) | Serverless, IoT   |
-| Redshift | Yes      | Cluster resize        | Yes | Cross-region snapshots | \$\$\$ high          | Analytics, BI     |
+**Redshift**
+- **Type**: Fully managed data warehouse for analytics and BI.
+- **Scaling**:
+  - **Elastic Resize**: Quickly change node count.
+  - **Concurrency Scaling**: Temporary extra clusters auto-spin up for heavy query load.
+  - **Spectrum**: Query S3 data directly via external tables.
+- **Availability/Recovery**:
+  - Snapshots automatically replicated to S3. Cross-region snapshot copy supported.
+  - No multi-AZ concept — entire cluster in one AZ, but snapshots provide DR.
+- **Cost**:
+  - Node-hour billing + separate Spectrum query charges.
+  - Reserved instances save up to 75%.
 
-**DocumentDB**:
-- Managed Document db that is MongoDB API compatible. If you have an existing Mongo app with `mongoose`, point to DocumentDB.
-- Pricing is similar to RDS (based on instance type, storage, IOPS).
+
+**DocumentDB**
+- **Type**: Managed MongoDB-compatible API (not true Mongo).
+- **Usage**: Good for lift-and-shift of Mongo apps (e.g., Mongoose ORM). Limited feature parity — no `mapReduce`, certain aggregation stages missing.
+- **HA**: Storage is replicated across 3 AZs. Failover within ~30s.
+- **Scaling**:
+  - Vertical scaling (larger instances).
+  - Read replicas supported.
+- **Cost Model**:
+  - Same as RDS (instance-based compute + storage + IOPS).
+  - Snapshots stored in S3 billed separately.
+
+| Database   | Managed? | Scaling                  | HA                   | Global             | Cost Control            | Best For             |
+| ---------- | -------- | ------------------------ | -------------------- | ------------------ | ----------------------- | -------------------- |
+| RDS        | Semi     | Vertical + read replicas | Multi-AZ failover    | Read Replicas only | \$\$\$ predictable      | Legacy apps, OLTP    |
+| Aurora     | Yes      | Horizontal + Serverless  | Multi-AZ, shared vol | Global DB          | \$\$–\$\$\$ (I/O heavy) | Cloud-native OLTP    |
+| DynamoDB   | Yes      | Infinite (partitioned)   | Multi-AZ by default  | Global Tables      | \$ pay per request      | Serverless, IoT, KV  |
+| Redshift   | Yes      | Cluster + concurrency    | Snapshots (S3 DR)    | Cross-region snaps | \$\$\$ high             | Analytics, BI, DW    |
+| DocumentDB | Yes      | Vertical + read replicas | Multi-AZ storage     | No (single region) | \$\$ like RDS           | Mongo lift-and-shift |
+
+
+
 
 ### S3
+
+**Core Concepts**:
+- **Buckets**: Global namespace containers for objects.
+- **Objects**: Data stored in S3, consisting of:
+  - Key (unique identifier within a bucket).
+  - Value (data payload).
+  - Metadata (system + user-defined).
+- **Regions**: Buckets are created in a specific AWS region and never move.
 
 **S3 Best Practices**:
 - Use bucket policies and IAM for access control.
 
-- Grant the myapp-reader IAM role read-only access to the bucket
+- Grant the **`myapp-reader` IAM role** read-only access to the bucket (readonly.json)
 
 ```json
 {
@@ -138,11 +296,25 @@ aws secretsmanager create-secret \
 ```
 - Attach the policy using `--role-name`, `--policy-name`, and `--policy-document`.
 
-**Storage Classes**: Intelligent Tiering automatically moves data between tiers. Buckets themselves don't have storage classes, the objects inside do.
-- `STANDARD`
-- `STANDARD_IA`
-- `ONEZONE_IA`
-- `GLACIER`
+```bash
+aws iam put-role-policy \
+  --role-name myapp-reader \
+  --policy-name ReadOnlyS3Policy \
+  --policy-document file://readonly.json
+```
+
+**Storage Classes**: Intelligent Tiering automatically moves data between tiers. 
+
+- `STANDARD`: Frequent access, high durability.
+- `STANDARD_IA`: Infrequent access, lower cost.
+- `ONEZONE_IA`: Infrequent access, stored in a single AZ.
+- `GLACIER`/`GLACIER_DEEP_ARCHIVE`: Archival, retrieval required.
+
+- Buckets themselves don't have storage classes, the objects inside do. For example:
+  - **Bucket**: `myapp-data-bucket`
+  - `logs/2025-04-04.json` -> GLACIER
+  - `images/banner.jpg` -> STANDARD
+  - `reports/monthly.csv` -> INTELLIGENT_TIERING
 
 - Data protection using **Oject Lock** (Write Once, Read Many (WORM) compliance).
 
@@ -171,6 +343,49 @@ aws secretsmanager create-secret \
   ]
 }
 ```
+
+- **Versioning** protects against accidental overwrite or deletion. Versioning is required for Object Lock and replication.
+
+- Using the low-level aws s3api API interface to modify the versioning:
+  - Overwrites and deletes do not erase data, they create new versions.
+
+```bash
+# Every new object version is uniquely stored.
+aws s3api put-bucket-versioning \
+  --bucket myapp-prod \
+  --versioning-configuration Status=Enabled
+```
+
+- When you enable versioning, every `PUT` creates a new version, not a replacement. Every `DELETE` creates a delete marker, not a true deletion. `Version IDs` are assigned to each object.
+  - Versioning can not be disabled, only suspended.
+
+- **Encryption**
+  - In Transit: TLS/SSL
+  - At Rest: 
+    - SSE-S3: AWS Managed Keys.
+    - SSE-KMS: Customer Managed KMS Keys.
+    - Client-side encryption: Encrypt before upload
+
+- Example Bucket Encryption using SSE-KMS, a specific KMS key `abcd-efgh`.
+  - If a PUT request does not specify encryption, S3 will automatically apply the KMS Key.
+  - Existing objects are not retroactively encrypted
+
+```bash
+# Example Bucket Encryption (SSE-KMS)
+aws s3api put-bucket-encryption \
+  --bucket myapp-prod \
+  --server-side-encryption-configuration '{
+    "Rules": [{
+      "ApplyServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "aws:kms",
+        "KMSMasterKeyID": "arn:aws:kms:us-east-1:123456789012:key/abcd-efgh"
+      }
+    }]
+  }'
+```
+
+- Use **CloudTrail** to track `Decrypt`, `Encrypt`, and `GenerateDataKey` events.
+- Enforce encryption at the bucket level and deny uploads that do not use SSE-KMS.
 
 ### CloudWatch
 
