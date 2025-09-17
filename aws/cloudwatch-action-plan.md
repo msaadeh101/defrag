@@ -96,10 +96,10 @@ resource "aws_cloudwatch_metric_alarm" "ecs_high_cpu" {
 - **Deliverable**: Test report with screenshots, metrics validation, and gaps.
 
 #### Exit Criteria (Phase 1)
-[ ] Alarms for ECS/EKS core metrics created and validated.
-[ ] Dashboards available for Dev teams and architects.
-[ ] Runbooks documented for responding to test alarms.
-[ ] Approval from architecture team on thresholds and escalation paths.
+- [ ] Alarms for ECS/EKS core metrics created and validated.
+- [ ] Dashboards available for Dev teams and architects.
+- [ ] Runbooks documented for responding to test alarms.
+- [ ] Approval from architecture team on thresholds and escalation paths.
 
 ---
 
