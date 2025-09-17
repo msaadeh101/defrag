@@ -386,27 +386,127 @@ aws s3api put-bucket-encryption \
 
 - Use **CloudTrail** to track `Decrypt`, `Encrypt`, and `GenerateDataKey` events.
 - Enforce encryption at the bucket level and deny uploads that do not use SSE-KMS.
+- Inspect an object to see if SSE was used `aws s3api head-object --bucket mybucket --key path/to/object.txt`
 
 ### CloudWatch
 
-- CloudWatch is deeply service integrated, with most AWS services emitting metrics automatically.
+- CloudWatch, a monitoring and observability service, is deeply integrated with other AWS services, with most AWS services emitting metrics automatically.
 
 **Core Components**:
 1. `Metrics`: 
-- Numerical time-series data (CPUUtilization, Latency).
-- Granularity: 1 minute is standard, 1-second for custom metrics at the lowest.
+- Numerical time-series data published by AWS services or custom apps (CPUUtilization, Latency. RequestCount).
+- Granularity: Standard resolution == 1 minute, High resolution == 1-second for custom metrics or select AWS services.
+
+- Publish a custom metric:
+
+```bash
+aws cloudwatch put-metric-data \
+  --metric-name PageLoadTime \
+  --namespace MyApplication \
+  --unit Seconds \
+  --value 1.45
+```
+- Best Practices:
+  - Use namespaces to organize metrics logically.
+  - Standardize dimensions (e.g. InstanceId, Environment) for query efficiency.
+  - Enable high resolution metrics only where required for the cost/performance tradeoff.
+
 2. `Logs`:
 - Centralized log storage & query via CloudWatch Logs Insights.
-- Supports ingestion from **Lambda**, **ECS**, **EKS**, **EC2**, **VPC Flow Logs**, **ALB Logs**.
+- Supports ingestion from **Lambda**, **ECS**, **EKS**, **EC2**, **VPC Flow Logs**, **ALB/ELB Logs**, **customApps**.
 - Retention is configurable per log group (days -> indefinite)
+
+- Query logs:
+
+```bash
+aws logs start-query \
+  --log-group-name /aws/lambda/my-function \
+  --start-time 1694300000 \
+  --end-time 1694303600 \
+  --query-string "fields @timestamp, @message | sort @timestamp desc | limit 20"
+```
+
+- Best Practices:
+  - Use structured logging (JSON) for easier queries.
+  - Configure log retention policies to manage costs.
+  - Protect sensitive data before logging (avoid secrets, PII)
+
 3. `Alarms`:
 - Threshold-based alerts on metrics.
-- Actions: SNS, AutoScaling, EventBridge, Systems Manager.
+- Types: Can be statistic thresholds (CPU > 80%) or Anomaly detection (dynamic thresholds using ML)
+- Actions: Can trigger SNS notifications, AutoScaling policies, EventBridge rules, Systems Manager automation.
+
+- Create a CloudWatch Alarm of a specific EC2 instance must be triggered twice:
+  - If triggered, will publish a message to the SNS topic `NotifyMe`
+
+```bash
+aws cloudwatch put-metric-alarm \
+  --alarm-name HighCPUAlarm \
+  --metric-name CPUUtilization \
+  --namespace AWS/EC2 \
+  --statistic Average \
+  --period 300 \
+  --threshold 80 \
+  --comparison-operator GreaterThanThreshold \
+  --dimensions Name=InstanceId,Value=i-1234567890abcdef0 \
+  --evaluation-periods 2 \
+  --alarm-actions arn:aws:sns:us-east-1:111122223333:NotifyMe
+```
+
+
 4. `Events (EventBridge)`:
-- Formerly CloudWatch Events.
-- Rule-based event bus (trigger Lambda on EC2 instance State=stopped)
+- Formerly CloudWatch Events. Delivers real-time event streams from AWS services and SaaS apps.
+- Rule-based event bus (trigger Lambda on EC2 instance `State=stopped`).
+
+- Event Rule for EC2 Instance State Change:
+
+```bash
+aws events put-rule \
+  --name EC2StopRule \
+  --event-pattern '{
+    "source": ["aws.ec2"],
+    "detail-type": ["EC2 Instance State-change Notification"],
+    "detail": { "state": ["stopped"] }
+  }'
+```
+
+- Best Practices:
+  - Use **event buses** to separate environments (e.g., prod, dev).
+  - Apply **dead-letter queues (DLQ)** for undeliverable events.
+  - Prefer **EventBridge Pipes** for transformations before consumption.
+
 5. `Dashboards`:
-- Custom visualiation of metrics and logs across accounts.
+- Custom visualiation of metrics, alarms and logs across accounts.
+- Cam aggregate across many accounts and regions.
+
+- Create a Dashboard for CPU Utilization:
+
+```bash
+aws cloudwatch put-dashboard \
+  --dashboard-name MyAppDashboard \
+  --dashboard-body '{
+    "widgets": [
+      {
+        "type": "metric",
+        "x": 0,
+        "y": 0,
+        "width": 12,
+        "height": 6,
+        "properties": {
+          "metrics": [
+            [ "AWS/EC2", "CPUUtilization", "InstanceId", "i-1234567890abcdef0" ]
+          ],
+          "title": "EC2 CPU Utilization"
+        }
+      }
+    ]
+  }'
+```
+
+- Best Practices:
+  - Use **tag-based metrics selection** to make dashboards reusable.
+  - Share dashboards with **cross-account IAM roles** for centralized visibility.
+  - Use dashboards alongside **CloudWatch Synthetics Canaries** for user experience monitoring.
 
 #### EKS
 
