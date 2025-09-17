@@ -388,6 +388,76 @@ aws s3api put-bucket-encryption \
 - Enforce encryption at the bucket level and deny uploads that do not use SSE-KMS.
 - Inspect an object to see if SSE was used `aws s3api head-object --bucket mybucket --key path/to/object.txt`
 
+### Elastic Beanstalk
+
+AWS Elastic Beanstalk is a PaaS service that simplifies deployments and scaling of web apps and services. It provides a managed environment that handles provisioning, load balancing, and auto-scaling of underlying AWS resources. Less granular control than ECS/EKS. **It abstracts EC2, ELB, AutoScaling Groups, and CloudWatch**.
+
+**Core Concepts and Platforms**
+- Application: A logical container for your app.
+- Application Version: A specific, deployable artifact of your app in `.jar` or `.war` (or `.zip`) format, uploaded to S3.
+- Environment: An instance-specific app version running on a chosen stack. Each env is a collection of resources (Ec2. ALB, Auto Scaling Group, etc) managed by Beanstalk.
+- Platforms (Java): Corretto (Standalone Java SE application, ideal for Spring Boot apps) and Tomcat (traditional Java web apps from WAR files to a managed Tomcat server)
+- Configuration: Managed via EB console, `ebextensions/` or `.ebignore` + `Dockerrun.aws.json`.
+
+**Customizing the Environment**
+- Place `.ebextensions` folder in the root of the app source bundle, includes additional configuration files.
+  - `.config`: Install additional packages.
+  - `container_commands`: Run custom scripts.
+  - `nginx.conf`: Modify server configuration.
+  - `JAVA_TOOL_OPTIONS`: Env variable for JVM customizations (also JAVA_OPTS, JVM_ARGS).
+
+**Deployment Strategies**
+- All at once: NOT recommended, causes downtime.
+- Rolling: Updates a batch of instances at a time. Rest of instances serve traffic.
+- Rolling with additional batch: A new batch of instances is added to the env before updating the old instances.
+- **Immutable**: Safest method for zero-downtime deployments. A new Auto Scaling Group is provisioned with new instances running the new version. Once instances are heavy, traffic is swapped. 
+
+**Deployment Pipeline**
+1. Build artifact (Maven/Gradle -> JAR/WAR)
+2. Upload to S3 with `aws elasticbeanstalk create-application-version`
+3. Deploy via:
+- CLI: `aws elasticbeanstalk create-application-version`
+- EB CLI: `eb deploy`
+
+```bash
+# Example: upload + deploy
+aws elasticbeanstalk create-application-version \
+  --application-name myservice \
+  --version-label v1.0.0 \
+  --source-bundle S3Bucket="my-bucket",S3Key="builds/myservice-v1.0.0.jar"
+
+aws elasticbeanstalk update-environment \
+  --environment-name myservice-prod \
+  --version-label v1.0.0
+```
+
+**Architecture Pattern**
+- Each microservice = separate EB app + environment.
+- Shared services like DB, Redis, Kafka live outside of EB.
+- Prefer ALBs for routing.
+- Integrate with Route53 for DNS and service discovery.
+- Use VPC-enabled environments with private subnets + NAT Gateways.
+- Configure min/max instance counts and set scaling triggers.
+
+**Best Practices and Notes**
+- Extend metrics with Micrometer/Prometheus JMX Exporter sidecar.
+- For Secrets, integrate with Secret Manager and SSM Parameter Store.
+- Use Amazon Linux 2 instances for long term support.
+- Pin dependencies to external services.
+
+- Example .ebextensions/01-env.config
+
+```yaml
+option_settings:
+  aws:elasticbeanstalk:application:environment:
+    SPRING_PROFILES_ACTIVE: prod
+    JAVA_OPTS: "-Xms512m -Xmx1024m"
+  aws:autoscaling:launchconfiguration:
+    InstanceType: t3.medium
+  aws:elasticbeanstalk:environment:
+    ServiceRole: "arn:aws:iam::123456789012:role/eb-service-role"
+```
+
 ### CloudWatch
 
 - CloudWatch, a monitoring and observability service, is deeply integrated with other AWS services, with most AWS services emitting metrics automatically.

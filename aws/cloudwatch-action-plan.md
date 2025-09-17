@@ -237,7 +237,10 @@ curl http://<service-url>/actuator/prometheus
 - **Metrics Collected**: JVM heap/non-heap usage, GC duration, thread pools, HTTP server latency, custom business counters (e.g., transaction volume).
 
 4. **Forward logs** to CloudWatch via Fluent Bit / FireLens with structured JSON.
-- ECS (FireLens): Configures a sidecar container running Fluent Bit as a log router using FireLens. The main app container uses awsfirelens for logs, instead of direct CloudWatch logging.
+- ECS (FireLens): Configures a sidecar container running Fluent Bit as a log router using FireLens. The main app container uses awsfirelens for logs, instead of direct CloudWatch logging. 
+
+**NOTE**: **Use `awslogs` log driver for simple deployment**.
+
 ```json
 "logConfiguration": {
   "logDriver": "awsfirelens",
