@@ -1,0 +1,40 @@
+version: '3.8'
+services:
+  jenkins:
+    image: jenkins/jenkins:lts
+    ports:
+      - "8080:8080"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/log/jenkins:/var/log/jenkins
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+    environment:
+      - JENKINS_OPTS=--logfile=/var/log/jenkins/jenkins.log
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.10.0
+    volumes:
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/log/jenkins:/var/log/jenkins:ro
+      - jenkins_home:/var/jenkins_home:ro
+    depends_on:
+      - elasticsearch
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.10.0
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch

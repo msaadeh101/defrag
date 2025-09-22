@@ -1,0 +1,33 @@
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /var/log/jenkins/jenkins.log
+  fields:
+    service: jenkins
+    log_type: application
+  multiline.pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'
+  multiline.negate: true
+  multiline.match: after
+
+- type: log
+  enabled: true
+  paths:
+    - /var/jenkins_home/jobs/*/builds/*/log
+  fields:
+    service: jenkins
+    log_type: build
+  multiline.pattern: '^\['
+  multiline.negate: true
+  multiline.match: after
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  index: "jenkins-logs-%{+yyyy.MM.dd}"
+
+setup.template.name: "jenkins-logs"
+setup.template.pattern: "jenkins-logs-*"
+
+processors:
+- add_host_metadata:
+    when.not.contains.tags: forwarded
