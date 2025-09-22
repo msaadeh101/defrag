@@ -625,10 +625,10 @@ resource "aws_cloudwatch_log_group" "eks_app" {
 
 #### S3
 
-- Enable S3 Storage Metrics (BucketSizeBytes, NumberOfObjects) and monitor per-bucket dashboards to visualize growth.
+- Enable S3 Storage Metrics (`BucketSizeBytes`, `NumberOfObjects`) and monitor per-bucket dashboards to visualize growth.
 - Enable CloudWatch Request Metrics per bucket/prefix or operation. (GetRequests, PutRequests, 4xxErrors).
 
-- S3 Event Notifications via CloudWatch/EventBridge:
+- **S3 Event Notifications** via CloudWatch/EventBridge:
     - S3 emits events like PutObject to AWS EventBridge, where rules can match events
     - The target would be an arn: `arn:aws:lambda:us-west-2:123456789012:function:ValidateFile`
 
@@ -650,7 +650,7 @@ resource "aws_cloudwatch_log_group" "eks_app" {
     - Throttles
     - IteratorAge (for streams)
 - Logs from `console.log`, CloudWatch Logs automatically.
-- Trigger alarms if Errors > 0 or Duration > 90th percentile.
+- Trigger alarms if `Errors > 0` or `Duration > 90th percentile`.
 
 #### CloudTrail
 

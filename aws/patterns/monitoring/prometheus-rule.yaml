@@ -1,0 +1,76 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: microservice-alerts
+  namespace: ${NAMESPACE}
+  labels:
+    app: microservice-app
+spec:
+  groups:
+  - name: microservice-app.rules
+    rules:
+    - alert: HighErrorRate
+      expr: |
+        (
+          rate(http_server_requests_seconds_count{status=~"5.."}[5m]) /
+          rate(http_server_requests_seconds_count[5m])
+        ) > 0.1
+      for: 2m
+      labels:
+        severity: critical
+        service: microservice-app
+      annotations:
+        summary: "High error rate detected"
+        description: "Error rate is above 10% for 2 minutes"
+        
+    - alert: HighResponseTime
+      expr: |
+        histogram_quantile(0.95, 
+          rate(http_server_requests_seconds_bucket[5m])
+        ) > 2
+      for: 5m
+      labels:
+        severity: warning
+        service: microservice-app
+      annotations:
+        summary: "High response time detected"
+        description: "95th percentile response time is above 2 seconds"
+        
+    - alert: PodCrashLooping
+      expr: |
+        rate(kube_pod_container_status_restarts_total[15m]) > 0
+      for: 5m
+      labels:
+        severity: critical
+        service: microservice-app
+      annotations:
+        summary: "Pod is crash looping"
+        description: "Pod {{ $labels.pod }} is crash looping"
+        
+    - alert: LowCPUUtilization
+      expr: |
+        (
+          rate(container_cpu_usage_seconds_total[5m]) /
+          container_spec_cpu_quota * container_spec_cpu_period
+        ) < 0.1
+      for: 30m
+      labels:
+        severity: info
+        service: microservice-app
+      annotations:
+        summary: "Low CPU utilization"
+        description: "CPU utilization is below 10% for 30 minutes"
+        
+    - alert: HighMemoryUsage
+      expr: |
+        (
+          container_memory_usage_bytes /
+          container_spec_memory_limit_bytes
+        ) > 0.9
+      for: 5m
+      labels:
+        severity: warning
+        service: microservice-app
+      annotations:
+        summary: "High memory usage"
+        description: "Memory usage is above 90%"

@@ -1,0 +1,132 @@
+{
+    "family": "microservice-app",
+    "networkMode": "awsvpc",
+    "requiresCompatibilities": ["FARGATE"],
+    "cpu": "1024",
+    "memory": "2048",
+    "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+    "taskRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskRole",
+    "containerDefinitions": [
+      {
+        "name": "microservice-app",
+        "image": "${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}",
+        "portMappings": [
+          {
+            "containerPort": 8080,
+            "protocol": "tcp",
+            "name": "http"
+          },
+          {
+            "containerPort": 8081,
+            "protocol": "tcp",
+            "name": "management"
+          }
+        ],
+        "essential": true,
+        "logConfiguration": {
+          "logDriver": "awslogs",
+          "options": {
+            "awslogs-group": "/ecs/microservice-app",
+            "awslogs-region": "${AWS_REGION}",
+            "awslogs-stream-prefix": "ecs",
+            "awslogs-create-group": "true"
+          }
+        },
+        "healthCheck": {
+          "command": [
+            "CMD-SHELL",
+            "curl -f http://localhost:8081/actuator/health || exit 1"
+          ],
+          "interval": 30,
+          "timeout": 5,
+          "retries": 3,
+          "startPeriod": 60
+        },
+        "environment": [
+          {
+            "name": "SPRING_PROFILES_ACTIVE",
+            "value": "${ENVIRONMENT}"
+          },
+          {
+            "name": "AWS_REGION",
+            "value": "${AWS_REGION}"
+          },
+          {
+            "name": "ENVIRONMENT",
+            "value": "${ENVIRONMENT}"
+          },
+          {
+            "name": "SERVICE_NAME",
+            "value": "microservice-app"
+          }
+        ],
+        "secrets": [
+          {
+            "name": "DB_PASSWORD",
+            "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${ENVIRONMENT}/db-password"
+          },
+          {
+            "name": "JWT_SECRET",
+            "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${ENVIRONMENT}/jwt-secret"
+          },
+          {
+            "name": "REDIS_PASSWORD",
+            "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${ENVIRONMENT}/redis-password"
+          }
+        ],
+        "mountPoints": [
+          {
+            "sourceVolume": "logs",
+            "containerPath": "/var/log/microservice-app",
+            "readOnly": false
+          }
+        ],
+        "ulimits": [
+          {
+            "name": "nofile",
+            "softLimit": 65536,
+            "hardLimit": 65536
+          }
+        ]
+      },
+      {
+        "name": "datadog-agent",
+        "image": "public.ecr.aws/datadog/agent:latest",
+        "essential": false,
+        "environment": [
+          {
+            "name": "DD_API_KEY",
+            "value": "${DD_API_KEY}"
+          },
+          {
+            "name": "DD_SITE",
+            "value": "datadoghq.com"
+          },
+          {
+            "name": "ECS_FARGATE",
+            "value": "true"
+          }
+        ]
+      }
+    ],
+    "volumes": [
+      {
+        "name": "logs",
+        "host": {}
+      }
+    ],
+    "tags": [
+      {
+        "key": "Environment",
+        "value": "${ENVIRONMENT}"
+      },
+      {
+        "key": "Service",
+        "value": "microservice-app"
+      },
+      {
+        "key": "BuildNumber",
+        "value": "${BUILD_NUMBER}"
+      }
+    ]
+  }

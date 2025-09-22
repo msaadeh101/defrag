@@ -1,4 +1,83 @@
-# Jenkins Introduction
+# Jenkins
+
+## Jenkins Administration
+
+1. **Core Service Management**
+- Systemd Service: Make sure Jenkins runs under systemd or equivalent init system.
+```bash
+systemctl enable jenkins
+systemctl status jenkins
+journalctl -u jenkins -f
+```
+- Graceful restarts: Use Jenkins built-in safe restart: `https://<jenkins>/safeRestart` when upgrading plugins or core version, to avoid canceling builds.
+- Rolling Updates: Configure if running multiple controllers or agents in K8 or another orchestrator.
+
+2. **Monitoring, Logging, Alerts**
+- Health Endpoints: /login, /metrics (via Prometheus plugin), /whoAmI endpoints for basic health probes.
+- Redirect jenkins.log to central ELK/Loki/Splunk.
+- Alert on Keywords like OutOfMemoryError, hudson.remoting.ChannelClosedException, ExecutorStepExecution$PlaceholderTask.
+- Use Prometheus plugin to scrape build queue length, executor usage, build success/failures JVM heap usage.
+- Alert Examples:
+    - Long build queues (>5m wait).
+    - High executor utilization (>85% sustained).
+    - Repeated build agent disconnections.
+    - Memory/GC pressure (heap >85% usage).
+    - Master unresponsive >1m.
+
+3. **Memory and Perf Tuning**
+- JVM Flags to tune based on workload size (Prefer `G1GC` for Jenkins as it has large heaps)
+```bash
+JAVA_OPTS="-Xms4g -Xmx8g -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:+HeapDumpOnOutOfMemoryError"
+# Initial Heap 4gb, max heap 8gb
+# enable G1 Garbage Collector, for apps with large heaps
+# Improve reference processing performance during GC by using parallelism
+# Generate a heap dump if OOM occurs for troubleshooting
+```
+- Use plugins like `jmap`, `jstat`, `MAT` or `Eclipse Memory Analyzer` to help analyze memory leaks.
+- For stuck builds, use `kill -3 <PID>`
+
+4. **Plugin Management**
+- Golden Rule is to limit plugin usage, to decrease surface area for bugs and security.
+- Mirror your plugins/core in a staging environment and test on builds there.
+- Use Jenkins plugin manager CLI: `jenkins-plugin-cli --plugins git:latest workflow-aggregator:latest`
+- Monitor Plugin health with the Plugin Health Score API, and replace deprecated plugins early.
+
+5. **Availability and Uptime**
+- Backup `JENKINS_HOME` (configs, jobs, plugins, credentials.xml)
+    - Exclude `workspace/` and `logs/` (too large).
+    - Store backups in S3/Azure Blob or NFS snapshots.
+- For Disaster Recovery, use IaC, test restoring a fresh Jenkins from scratch regularly.
+- For scalability, use ephemeral agents via K8 plugin, EC2 plugin, Azure VMSS.
+- Do NOT run builds on the controller, only management.
+- Put Jenkins behind `NGINX`/`Apache`/`Traefik`/`Ingress`. Terminate TLS at the proxy.
+- Configure Sticky sessions if not using external session storage.
+
+6. **Security and Hardening**
+- Use Jenkins Credentials plugin -> Integrate with Hashi vault, AWS Secrets Manager, or Azure KV.
+- For RBAC, use Matrix Authorization or `Role-Based Strategy` plugin.
+- Stay on LTS release, always update in staging environment first.
+
+7. **Disaster Recovery and Incident Response**
+- Common Failure Modes:
+    - OOM Kill -> Increase memory and/or analyze leaks.
+    - Agent disconnections -> Check network reliability and TCP keepalive settings.
+    - Deadlocks/Slow UI -> Thread Dumps + GC Tuning.
+- Kill Switch:
+    - **ALWAYS** keep a script ready to spin up fresh Jenkins wit Iac + Restore Configs from backup.
+
+8. **Operational Runbooks**
+- Daily:
+    - Check build queue length, executor health, and logs.
+- Weekly:
+    - Verify backups.
+    - Review pending plugin/core updates.
+    - Run script console checks for orphaned jobs/heavy workspaces.
+- Monthly:
+    - Rotate Credentials.
+    - Test DR restore.
+    - Clean up unused plugins.
+
+## Pipeline Basics
 
 - Execute the pipeline within a docker container
 ```groovy

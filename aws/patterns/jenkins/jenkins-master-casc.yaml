@@ -1,0 +1,99 @@
+// jenkins-master-casc.yaml - Configuration as Code
+jenkins:
+  systemMessage: "Jenkins configured automatically by Jenkins Configuration as Code plugin"
+  
+  securityRealm:
+    ldap:
+      configurations:
+        - server: "ldaps://ldap.company.com:636"
+          rootDN: "dc=company,dc=com"
+          userSearchBase: "ou=users"
+          userSearch: "uid={0}"
+          groupSearchBase: "ou=groups"
+          
+  authorizationStrategy:
+    roleBased:
+      roles:
+        global:
+          - name: "admin"
+            description: "Jenkins administrators"
+            permissions:
+              - "Overall/Administer"
+            assignments:
+              - "devops-team"
+          - name: "developer"
+            description: "Developers"
+            permissions:
+              - "Overall/Read"
+              - "Job/Build"
+              - "Job/Cancel"
+            assignments:
+              - "dev-team"
+
+  clouds:
+    - kubernetes:
+        name: "eks-cluster"
+        serverUrl: "https://kubernetes.default.svc.cluster.local"
+        namespace: "jenkins"
+        credentialsId: "jenkins-sa"
+        jenkinsTunnel: "jenkins-agent:50000"
+        jenkinsUrl: "http://jenkins:8080"
+        templates:
+          - name: "maven-agent"
+            label: "maven java"
+            serviceAccount: "jenkins-agent"
+            containers:
+              - name: "maven"
+                image: "maven:3.9-eclipse-temurin-21"
+                command: "sleep"
+                args: "99d"
+                resourceRequestMemory: "1Gi"
+                resourceLimitMemory: "2Gi"
+                resourceRequestCpu: "500m"
+                resourceLimitCpu: "1000m"
+              - name: "docker"
+                image: "docker:24.0-dind"
+                privileged: true
+                resourceRequestMemory: "512Mi"
+                resourceLimitMemory: "1Gi"
+            volumes:
+              - hostPathVolume:
+                  hostPath: "/var/run/docker.sock"
+                  mountPath: "/var/run/docker.sock"
+
+tool:
+  maven:
+    installations:
+      - name: "Maven 3.9"
+        properties:
+          - installSource:
+              installers:
+                - maven:
+                    id: "3.9.6"
+  jdk:
+    installations:
+      - name: "OpenJDK 21"
+        properties:
+          - installSource:
+              installers:
+                - jdkInstaller:
+                    id: "jdk-21.0.2+13"
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "docker-registry"
+              username: "${DOCKER_REGISTRY_USER}"
+              password: "${DOCKER_REGISTRY_PASSWORD}"
+          - aws:
+              scope: GLOBAL
+              id: "aws-credentials"
+              accessKey: "${AWS_ACCESS_KEY_ID}"
+              secretKey: "${AWS_SECRET_ACCESS_KEY}"
+          - string:
+              scope: GLOBAL
+              id: "sonar-token"
+              secret: "${SONAR_TOKEN}"
