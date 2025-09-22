@@ -5,7 +5,7 @@ stage('Canary Deployment') {
     }
     steps {
         script {
-            // Deploy canary version
+            // Deploy canary version from separate function.
             deployCanaryVersion(environment, imageTag)
             
             // Start with 5% traffic
@@ -43,13 +43,16 @@ stage('Canary Deployment') {
     }
 }
 
+
+// Define functions inside Jenkinsfile/Shared Groovy libs
+// Ensure kubectl and other CLI tools available on Jenkins agent
 def deployCanaryVersion(environment, imageTag) {
-    container('kubectl') {
+    container('kubectl') { // Runs shell command inside kubectl container context
         sh """
             export NAMESPACE=${environment}
             export IMAGE_TAG=${imageTag}
             
-            # Deploy canary deployment
+            # Deploy canary deployment, envsubst to replace ENV variables
             envsubst < k8s/canary-deployment.yaml | kubectl apply -f -
             kubectl rollout status deployment/microservice-app-canary -n ${environment}
             

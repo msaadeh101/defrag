@@ -1,4 +1,5 @@
 @Library('shared-library') _
+// Loads a shared Jenkins library named "shared-library" containing reusable pipeline functions and steps.
 
 pipeline {
     agent {
@@ -68,6 +69,8 @@ spec:
         AWS_DEFAULT_REGION = 'us-west-2'
         KUBECONFIG = '/tmp/kubeconfig'
     }
+    // environment block defines variables globally accessible within all stages.
+    // Credentials helper fetches secret 'sonar-token' securely (Jenkins credential binding).
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
@@ -75,6 +78,13 @@ spec:
         disableConcurrentBuilds()
         skipStagesAfterUnstable()
     }
+    /* 
+       Options control pipeline behavior:
+       - buildDiscarder removes old builds beyond 10 to save disk space.
+       - timeout aborts pipeline if it runs over 30 minutes.
+       - disableConcurrentBuilds prevents simultaneous runs of this job.
+       - skipStagesAfterUnstable stops subsequent stages if a stage is unstable.
+    */
 
     stages {
         stage('Checkout') {
@@ -92,6 +102,8 @@ spec:
                 }
             }
         }
+        // "checkout scm" clones source code in the default configured repo.
+        // script block runs shell inside Groovy to get short Git commit and branch
 
         stage('Validate') {
             parallel {
@@ -142,6 +154,10 @@ spec:
                 }
             }
         }
+        // parallel block runs multiple stages simultaneously
+        // container('maven') executes commands inside the maven container declared at pipeline agent level
+        // publishHTML publishes HTML reports to Jenkins UI after stage completion
+
 
         stage('Test') {
             steps {
@@ -372,12 +388,12 @@ spec:
         success {
             script {
                 if (env.BRANCH_NAME == 'main') {
-                    sendSlackAlert("✅ Production deployment successful for ${IMAGE_NAME}:${IMAGE_TAG}")
+                    sendSlackAlert("GREEN Production deployment successful for ${IMAGE_NAME}:${IMAGE_TAG}")
                 }
             }
         }
         failure {
-            sendSlackAlert("❌ Pipeline failed for ${IMAGE_NAME} on branch ${BRANCH_NAME}")
+            sendSlackAlert("RED Pipeline failed for ${IMAGE_NAME} on branch ${BRANCH_NAME}")
         }
     }
 }
@@ -421,7 +437,7 @@ def runProductionTests() {
 def sendSlackAlert(message) {
     slackSend(
         channel: '#deployments',
-        color: message.startsWith('✅') ? 'good' : 'danger',
+        color: message.startsWith('GREEN') ? 'good' : 'danger',
         message: message,
         teamDomain: 'your-team',
         token: 'slack-token'

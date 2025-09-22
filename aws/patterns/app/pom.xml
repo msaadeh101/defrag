@@ -1,23 +1,28 @@
 <!-- pom.xml -->
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Root element: defines this as a Maven project configuration file -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
          http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <!-- Model version for Maven POM format -->
     <modelVersion>4.0.0</modelVersion>
 
+    <!-- Inheritance: Uses Spring Boot parent POM to inherit default configs, dependencies, and plugin versions -->
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
         <version>3.2.1</version>
-        <relativePath/>
+        <relativePath/> <!-- look locally for parent, empty disables -->
     </parent>
 
+    <!-- Core project coordinates: group is like namespace, artifact is project name, version is project version -->
     <groupId>com.company</groupId>
     <artifactId>microservice-app</artifactId>
     <version>1.0.0</version>
-    <packaging>jar</packaging>
+    <packaging>jar</packaging> <!-- Output type: jar file -->
 
+    <!-- Properties for easy version and config management -->
     <properties>
         <java.version>21</java.version>
         <spring-cloud.version>2023.0.0</spring-cloud.version>
@@ -26,7 +31,7 @@
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         
-        <!-- Plugin versions -->
+        <!-- Plugin versions centralized here -->
         <maven-surefire.version>3.2.3</maven-surefire.version>
         <maven-failsafe.version>3.2.3</maven-failsafe.version>
         <jacoco.version>0.8.11</jacoco.version>
@@ -36,12 +41,13 @@
         <sonar.version>3.10.0.2594</sonar.version>
     </properties>
 
+    <!-- Declare dependencies needed to compile, run, and test your code -->
     <dependencies>
         <!-- Spring Boot Starters -->
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <scope>test</scope>
+            <scope>test</scope> <!-- Only used during tests -->
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
@@ -55,6 +61,7 @@
         </dependency>
     </dependencies>
 
+    <!-- Manage versions for dependencies brought in transitively (via Spring Cloud and Testcontainers) -->
     <dependencyManagement>
         <dependencies>
             <dependency>
@@ -62,7 +69,7 @@
                 <artifactId>spring-cloud-dependencies</artifactId>
                 <version>${spring-cloud.version}</version>
                 <type>pom</type>
-                <scope>import</scope>
+                <scope>import</scope> <!-- Import BOM: manages versions for multiple dependencies -->
             </dependency>
             <dependency>
                 <groupId>org.testcontainers</groupId>
@@ -80,7 +87,7 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
-                    <layers>
+                    <layers> <!-- Enable layering of Docker images for efficient container builds -->
                         <enabled>true</enabled>
                     </layers>
                 </configuration>
@@ -91,11 +98,13 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${maven-surefire.version}</version>
+                <!-- Only include classes matching *Test or *Tests as unit tests -->
                 <configuration>
                     <includes>
                         <include>**/*Test.java</include>
                         <include>**/*Tests.java</include>
                     </includes>
+                    <!-- Set Spring profile active to 'test' during unit test runs -->
                     <systemPropertyVariables>
                         <spring.profiles.active>test</spring.profiles.active>
                     </systemPropertyVariables>
@@ -108,10 +117,12 @@
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <version>${maven-failsafe.version}</version>
                 <configuration>
+                    <!-- Include *IT and *IntegrationTest as integration tests -->
                     <includes>
                         <include>**/*IT.java</include>
                         <include>**/*IntegrationTest.java</include>
                     </includes>
+                    <!-- Set Spring profile active to 'integration-test' for integration tests -->
                     <systemPropertyVariables>
                         <spring.profiles.active>integration-test</spring.profiles.active>
                     </systemPropertyVariables>
@@ -119,8 +130,8 @@
                 <executions>
                     <execution>
                         <goals>
-                            <goal>integration-test</goal>
-                            <goal>verify</goal>
+                            <goal>integration-test</goal> <!-- Run integration tests -->
+                            <goal>verify</goal>           <!-- Verify results -->
                         </goals>
                     </execution>
                 </executions>
@@ -150,6 +161,7 @@
                             <goal>report</goal>
                         </goals>
                     </execution>
+                    <!-- Merge coverage data from unit and integration tests -->
                     <execution>
                         <id>report-integration</id>
                         <phase>post-integration-test</phase>
@@ -174,6 +186,7 @@
                             </fileSets>
                         </configuration>
                     </execution>
+                    <!-- Create aggregated report from merged data -->
                     <execution>
                         <id>report-aggregate</id>
                         <phase>verify</phase>
@@ -185,6 +198,7 @@
                             <outputDirectory>${project.reporting.outputDirectory}/jacoco-aggregate</outputDirectory>
                         </configuration>
                     </execution>
+                    <!-- Coverage check with required minimums -->
                     <execution>
                         <id>check</id>
                         <phase>verify</phase>
@@ -215,7 +229,7 @@
                 </executions>
             </plugin>
 
-            <!-- SpotBugs Static Analysis -->
+            <!-- SpotBugs: static code analysis tool for bug detection -->
             <plugin>
                 <groupId>com.github.spotbugs</groupId>
                 <artifactId>spotbugs-maven-plugin</artifactId>
@@ -236,16 +250,16 @@
                 </executions>
             </plugin>
 
-            <!-- Checkstyle -->
+            <!-- Checkstyle: checks code formatting and style rules -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-checkstyle-plugin</artifactId>
                 <version>${checkstyle.version}</version>
                 <configuration>
-                    <configLocation>checkstyle.xml</configLocation>
+                    <configLocation>checkstyle.xml</configLocation> <!-- Rules config -->
                     <encoding>UTF-8</encoding>
                     <consoleOutput>true</consoleOutput>
-                    <failsOnError>true</failsOnError>
+                    <failsOnError>true</failsOnError> <!-- Fail build if issues found -->
                     <linkXRef>false</linkXRef>
                 </configuration>
                 <executions>
@@ -259,7 +273,7 @@
                 </executions>
             </plugin>
 
-            <!-- OWASP Dependency Check -->
+            <!-- OWASP Dependency Check: security vulnerabilities scanning for dependencies -->
             <plugin>
                 <groupId>org.owasp</groupId>
                 <artifactId>dependency-check-maven</artifactId>
@@ -277,7 +291,7 @@
                 </executions>
             </plugin>
 
-            <!-- SonarQube -->
+            <!-- SonarQube plugin: integrates code quality scanning with SonarQube server -->
             <plugin>
                 <groupId>org.sonarsource.scanner.maven</groupId>
                 <artifactId>sonar-maven-plugin</artifactId>
@@ -286,6 +300,7 @@
         </plugins>
     </build>
 
+    <!-- Profiles for build customizations, e.g., Docker profile to build container image -->
     <profiles>
         <profile>
             <id>docker</id>
