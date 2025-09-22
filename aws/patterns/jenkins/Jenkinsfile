@@ -1,0 +1,445 @@
+@Library('shared-library') _
+// Loads a shared Jenkins library named "shared-library" containing reusable pipeline functions and steps.
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins-agent
+  containers:
+  - name: maven
+    image: maven:3.9-eclipse-temurin-21
+    command:
+    - sleep
+    args:
+    - 99d
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+    volumeMounts:
+    - name: maven-cache
+      mountPath: /root/.m2
+  - name: docker
+    image: docker:24.0-dind
+    securityContext:
+      privileged: true
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+    env:
+    - name: DOCKER_TLS_CERTDIR
+      value: ""
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command:
+    - sleep
+    args:
+    - 99d
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+  volumes:
+  - name: maven-cache
+    persistentVolumeClaim:
+      claimName: maven-cache-pvc
+  - name: docker-sock
+    hostPath:
+      path: /var/run/docker.sock
+"""
+        }
+    }
+
+    environment {
+        DOCKER_REGISTRY = 'your-account.dkr.ecr.us-west-2.amazonaws.com'
+        IMAGE_NAME = "${env.JOB_NAME.split('/')[0]}"
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
+        SONAR_TOKEN = credentials('sonar-token')
+        AWS_DEFAULT_REGION = 'us-west-2'
+        KUBECONFIG = '/tmp/kubeconfig'
+    }
+    // environment block defines variables globally accessible within all stages.
+    // Credentials helper fetches secret 'sonar-token' securely (Jenkins credential binding).
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        skipStagesAfterUnstable()
+    }
+    /* 
+       Options control pipeline behavior:
+       - buildDiscarder removes old builds beyond 10 to save disk space.
+       - timeout aborts pipeline if it runs over 30 minutes.
+       - disableConcurrentBuilds prevents simultaneous runs of this job.
+       - skipStagesAfterUnstable stops subsequent stages if a stage is unstable.
+    */
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: "git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim()
+                    env.BRANCH_NAME = sh(
+                        script: "git rev-parse --abbrev-ref HEAD",
+                        returnStdout: true
+                    ).trim()
+                }
+            }
+        }
+        // "checkout scm" clones source code in the default configured repo.
+        // script block runs shell inside Groovy to get short Git commit and branch
+
+        stage('Validate') {
+            parallel {
+                stage('Code Quality') {
+                    steps {
+                        container('maven') {
+                            sh '''
+                                mvn clean compile
+                                mvn spotbugs:check
+                                mvn checkstyle:check
+                            '''
+                        }
+                    }
+                    post {
+                        always {
+                            publishHTML([
+                                allowMissing: false,
+                                alwaysLinkToLastBuild: true,
+                                keepAll: true,
+                                reportDir: 'target/site',
+                                reportFiles: 'checkstyle.html,spotbugs.html',
+                                reportName: 'Code Quality Report'
+                            ])
+                        }
+                    }
+                }
+
+                stage('Security Scan') {
+                    steps {
+                        container('maven') {
+                            sh '''
+                                mvn org.owasp:dependency-check-maven:check
+                            '''
+                        }
+                    }
+                    post {
+                        always {
+                            publishHTML([
+                                allowMissing: false,
+                                alwaysLinkToLastBuild: true,
+                                keepAll: true,
+                                reportDir: 'target',
+                                reportFiles: 'dependency-check-report.html',
+                                reportName: 'OWASP Dependency Check'
+                            ])
+                        }
+                    }
+                }
+            }
+        }
+        // parallel block runs multiple stages simultaneously
+        // container('maven') executes commands inside the maven container declared at pipeline agent level
+        // publishHTML publishes HTML reports to Jenkins UI after stage completion
+
+
+        stage('Test') {
+            steps {
+                container('maven') {
+                    sh '''
+                        mvn test jacoco:report
+                        mvn integration-test jacoco:report-integration
+                        mvn jacoco:merge jacoco:report-aggregate
+                    '''
+                }
+            }
+            post {
+                always {
+                    junit 'target/surefire-reports/*.xml,target/failsafe-reports/*.xml'
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'target/site/jacoco-aggregate',
+                        reportFiles: 'index.html',
+                        reportName: 'Coverage Report'
+                    ])
+                    script {
+                        def coverage = readFile('target/site/jacoco-aggregate/index.html')
+                        def matcher = coverage =~ /Total[^%]*?(\d+)%/
+                        if (matcher.find()) {
+                            env.COVERAGE_PERCENTAGE = matcher[0][1]
+                            echo "Code coverage: ${env.COVERAGE_PERCENTAGE}%"
+                            
+                            if (env.COVERAGE_PERCENTAGE.toInteger() < 80) {
+                                error("Code coverage ${env.COVERAGE_PERCENTAGE}% is below minimum threshold of 80%")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                    changeRequest()
+                }
+            }
+            steps {
+                container('maven') {
+                    withSonarQubeEnv('SonarQube') {
+                        sh '''
+                            mvn sonar:sonar \
+                                -Dsonar.projectKey=${JOB_NAME} \
+                                -Dsonar.projectName=${JOB_NAME} \
+                                -Dsonar.branch.name=${BRANCH_NAME} \
+                                -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco-aggregate/jacoco.xml
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                    changeRequest()
+                }
+            }
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Build & Push Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                }
+            }
+            steps {
+                container('maven') {
+                    sh 'mvn clean package -DskipTests'
+                }
+                container('docker') {
+                    script {
+                        sh '''
+                            # Login to ECR
+                            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${DOCKER_REGISTRY}
+                            
+                            # Build multi-arch image
+                            docker buildx create --use --name multiarch-builder
+                            docker buildx build --platform linux/amd64,linux/arm64 \
+                                --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+                                --build-arg VCS_REF=${GIT_COMMIT_SHORT} \
+                                --build-arg VERSION=${BUILD_NUMBER} \
+                                -t ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} \
+                                -t ${DOCKER_REGISTRY}/${IMAGE_NAME}:latest \
+                                --push .
+                        '''
+                    }
+                }
+            }
+            post {
+                success {
+                    echo "Docker image pushed: ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+                }
+            }
+        }
+
+        stage('Security Scan Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                }
+            }
+            steps {
+                container('docker') {
+                    sh '''
+                        # Install Trivy
+                        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | apt-key add -
+                        echo "deb https://aquasecurity.github.io/trivy-repo/deb generic main" | tee -a /etc/apt/sources.list
+                        apt-get update && apt-get install -y trivy
+                        
+                        # Scan image
+                        trivy image --exit-code 1 --severity HIGH,CRITICAL \
+                            --format json --output trivy-report.json \
+                            ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy-report.json', fingerprint: true
+                }
+            }
+        }
+
+        stage('Deploy to Staging') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                container('kubectl') {
+                    script {
+                        deployToEnvironment('staging', env.IMAGE_TAG)
+                    }
+                }
+            }
+            post {
+                success {
+                    echo "Deployment to staging successful"
+                    script {
+                        // Wait for deployment to be ready
+                        container('kubectl') {
+                            sh '''
+                                kubectl rollout status deployment/${IMAGE_NAME} -n staging --timeout=300s
+                                kubectl get pods -n staging -l app=${IMAGE_NAME}
+                            '''
+                        }
+                        
+                        // Run smoke tests
+                        runSmokeTests('staging')
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Production') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    // Manual approval for production deployment
+                    timeout(time: 5, unit: 'MINUTES') {
+                        input message: 'Deploy to production?', 
+                              ok: 'Deploy',
+                              submitterParameter: 'APPROVER'
+                    }
+                    
+                    container('kubectl') {
+                        deployToEnvironment('production', env.IMAGE_TAG)
+                    }
+                }
+            }
+            post {
+                success {
+                    echo "Production deployment successful by: ${env.APPROVER}"
+                    script {
+                        container('kubectl') {
+                            sh '''
+                                kubectl rollout status deployment/${IMAGE_NAME} -n production --timeout=600s
+                                kubectl get pods -n production -l app=${IMAGE_NAME}
+                            '''
+                        }
+                        
+                        // Run comprehensive tests in production
+                        runProductionTests()
+                    }
+                }
+                failure {
+                    script {
+                        // Automatic rollback on deployment failure
+                        container('kubectl') {
+                            sh '''
+                                kubectl rollout undo deployment/${IMAGE_NAME} -n production
+                                kubectl rollout status deployment/${IMAGE_NAME} -n production --timeout=300s
+                            '''
+                        }
+                        
+                        // Send alerts
+                        sendSlackAlert('Production deployment failed and rolled back')
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            script {
+                if (env.BRANCH_NAME == 'main') {
+                    sendSlackAlert("GREEN Production deployment successful for ${IMAGE_NAME}:${IMAGE_TAG}")
+                }
+            }
+        }
+        failure {
+            sendSlackAlert("RED Pipeline failed for ${IMAGE_NAME} on branch ${BRANCH_NAME}")
+        }
+    }
+}
+
+def deployToEnvironment(environment, imageTag) {
+    sh """
+        # Update deployment with new image
+        kubectl set image deployment/${IMAGE_NAME} ${IMAGE_NAME}=${DOCKER_REGISTRY}/${IMAGE_NAME}:${imageTag} -n ${environment}
+        
+        # Add deployment annotations
+        kubectl annotate deployment/${IMAGE_NAME} -n ${environment} \
+            deployment.kubernetes.io/revision-history-limit=10 \
+            deployment.kubernetes.io/change-cause="Jenkins build ${BUILD_NUMBER} - ${GIT_COMMIT_SHORT}"
+    """
+}
+
+def runSmokeTests(environment) {
+    container('kubectl') {
+        sh """
+            # Get service URL
+            SERVICE_URL=\$(kubectl get service ${IMAGE_NAME} -n ${environment} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+            
+            # Wait for service to be ready
+            timeout 300 bash -c 'until curl -f http://\$SERVICE_URL/actuator/health; do sleep 5; done'
+            
+            # Run basic health checks
+            curl -f http://\$SERVICE_URL/actuator/health
+            curl -f http://\$SERVICE_URL/actuator/info
+        """
+    }
+}
+
+def runProductionTests() {
+    // Run comprehensive tests against production
+    build job: 'e2e-tests', parameters: [
+        string(name: 'TARGET_ENV', value: 'production'),
+        string(name: 'SERVICE_VERSION', value: env.IMAGE_TAG)
+    ], wait: true
+}
+
+def sendSlackAlert(message) {
+    slackSend(
+        channel: '#deployments',
+        color: message.startsWith('GREEN') ? 'good' : 'danger',
+        message: message,
+        teamDomain: 'your-team',
+        token: 'slack-token'
+    )
+}

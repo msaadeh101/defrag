@@ -1,0 +1,52 @@
+groups:
+- name: jenkins
+  rules:
+  # Build queue length
+  - alert: JenkinsBuildQueueTooLong
+    expr: jenkins_queue_size_value > 5
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Jenkins build queue is too long"
+      description: "Build queue has {{ $value }} items waiting for more than 5 minutes"
+
+  # Executor utilization
+  - alert: JenkinsHighExecutorUtilization
+    expr: (jenkins_executor_in_use_value / jenkins_executor_count_value) * 100 > 85
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High Jenkins executor utilization"
+      description: "Executor utilization is {{ $value }}% for more than 10 minutes"
+
+  # Memory usage
+  - alert: JenkinsHighMemoryUsage
+    expr: (jenkins_vm_memory_heap_used / jenkins_vm_memory_heap_max) * 100 > 85
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Jenkins memory usage is high"
+      description: "Heap memory usage is {{ $value }}%"
+
+  # Build failure rate
+  - alert: JenkinsHighFailureRate
+    expr: rate(jenkins_builds_failed_build_count[10m]) / rate(jenkins_builds_total_build_count[10m]) > 0.5
+    for: 15m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High Jenkins build failure rate"
+      description: "Build failure rate is {{ $value }} over the last 10 minutes"
+
+  # Node disconnections
+  - alert: JenkinsAgentDisconnected
+    expr: jenkins_node_offline_value > 0
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Jenkins agent is offline"
+      description: "{{ $value }} Jenkins agents are offline"

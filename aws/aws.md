@@ -2,6 +2,94 @@
 
 ## Best Practices
 
+### EC2 Instances and Logging In
+
+1. Prerequisites:
+- Key Pair (`.pem` file) or SSM Session Manager access.
+  - Never retreivable again after download, secure in a vault or secret manager.
+  - SSM Session Manager requires the SSM agent + IAM role on instance + VPC endpoints (if no internet).
+- Private IP (if inside network) or Public IP/DNS (external).
+  - Inside network: Use Private IP (no NAT/IGW hop).
+  - External laptop: Use Public DNS or Elastic IP (requires IGW/NAT, SG rules)
+- Correct IAM permissions to describe instances, use SSM or download key pairs.
+- Installed SSH client (ssh for Mac/Linux, PuTTY or PowerShell for Windows).
+- Network access: Security Groups (SGs) and NACL/Route Table configured.
+  - SGs are stateful, inbound 22 must be open from source, outbound must allow `>1024` for responses.
+  - NACLs are stateless, must allow inbound/outbound explicitly. Check if experiencing timeout.
+  - Route Tables:
+    - Public subnet -> IGW route (`0.0.0.0/0` -> `igw-xxxxx`)
+    - Private subnet (Workspaces or VPN) -> routes via VPC peering, TGW, or internal routing.
+
+2. IAM Permissions: You or Workspace user needs an IAM policy that allows EC2/SSM actions. Add IAM conditions to restrict by (`aws:SourceIp`, `aws:ResourceTag`) for zero-trust.
+
+```yaml
+Version: "2012-10-17"
+Statement:
+  - Effect: Allow
+    Action:
+      - ec2:DescribeInstances
+      - ec2:DescribeKeyPairs
+      - ec2-instance-connect:SendSSHPublicKey
+      - ssm:StartSession
+      - ssm:SendCommand
+    Resource: arn:aws:ec2:region:account:instance/*
+```
+
+3. SSH Key Pair setup: When you create an EC2, you associate a Key pair.
+- Download the `.pem` file locally.
+- Set file permissions: `chmod 400 my-key.pem`
+- Example SSH config (`~/.ssh/config`)
+
+```yaml
+Host my-ec2
+  HostName ec2-18-123-45-67.compute-1.amazonaws.com
+  User ec2-user
+  IdentityFile ~/.ssh/my-key.pem
+```
+- Next you can connect: `ssh my-ec2`
+
+4. Logging in from AWS Workspaces
+- Workspaces in the same VPC directly can reach the EC2 using private IP. Ensure the SG of the EC2 allows inbound SSH.
+
+```bash
+ssh -i ~/.ssh/my-key.pem ec2-user@10.0.2.45
+```
+
+5. Networking Checklist
+- Security Groups should allow Inbound TCP on port 22 from your IP.
+- NACLs should allow inbound/outbound TCP 22.
+- Route Table: Internet Gateway or VPC Peering/Private subnet routing.
+
+6. Alternative using AWS SSM (No SSH keys needed).
+
+```bash
+aws ssm start-session --target i-1234567890abcdef
+```
+
+- IAM Role attached to instance:
+
+```yaml
+Version: "2012-10-17"
+Statement:
+  - Effect: Allow
+    Action:
+      - ssm:*
+      - ec2messages:*
+      - cloudwatch:PutMetricData
+    Resource: "*"
+```
+
+7. Troubleshooting
+- Permission denied (public key): Username may vary by AMI, wrong .pem file, permissions.
+- SG/NACL disallowing or no route.
+- Key Lost: Use SSM Session manager or stop instance, detach root volume, attach to another instance and fix `~/.ssh/authorized keys`
+
+8. Best Practices
+- Use SSM Session Manager for auditing and no key managment.
+- Rotate keys regularly.
+- Consider a jump box or bastion host for many private instances.
+- Store SSH configs in`~/.ssh/config`
+
 ### EKS and Secrets
 - AWS EKS supports IRSA, bridges Kubernetes RBAC and AWS IAM using OIDC trust relationships.
 
@@ -13,6 +101,12 @@
           "oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED1234:sub": "system:serviceaccount:default:s3-reader"
         }
 ```
+
+- `"oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED1234:sub"` is the fully qualified OIDC provider URL.
+  - `EXAMPLED1234` is the unique ID for your EKS cluster's OIDC identity provider.
+- `"system:serviceaccount:default:s3-reader"` is the K8 SA identity.
+  - `system:serviceaccount:<namespace>:<serviceaccount-name>` where namespace is `default` and SA is `s3-reader`
+- This ensures that only the s3-reader SA in the default namespace can assume that IAM role.
 
 - Lock `sub` to a sepcific namespace and SA for security.
 - Use `StringLike` with `system:serviceaccount:*:s3-reader` if multiple namespaces sare the same role.
@@ -60,22 +154,49 @@ aws secretsmanager create-secret \
 ### Data Services
 
 **DynamoDB**:
-- NoSQL Key-Value/Document Store
-- On-demand (pay per request) vs Provisioned capacity (pre-allocate, cheaper for steady traffic).
-- Conflict Resolution is last-writer-wins.
-- DynamoDB Streams: Change Data Capture (CDC) for Lambda, Kinesis, etc.
-- DAX: DynamoDB accelerator for caching. In-memory cache for microsecond reads.
-- PTR: Point-in-time recovery for backups.
-- Streams, DAX, and backups are billed separately.
+- Fully Managed NoSQL Key-Value + Document Store
+- **Capacity Modes**:
+  - **On-demand**: autoscales throughput, pay per request (good for unpredictable workloads).
+  - **Provisioned**: preallocate `RCU`/`WCU` (read/write capacity units). Use Auto scaling to adjust dynamically.
+- **Conflict Resolution** is last-writer-wins based on timestamp. For multi-region Global Tables, replication conflicts follow this rule.
+- **Features**:
+  - **DynamoDB Streams**: Change Data Capture (CDC). Triggers Lambda/Kineses -> good for event-driven designs.
+  - **DAX**: DynamoDB accelerator for caching. In-memory cache for microsecond latency for write-through/read-through.
+  - **PITR**: Point-in-time recovery for backups.
+  - **Global Tables**: multi region, active-active replication. Sub-second cross-region replication.
+- **Billing**:
+  - Streams, DAX, PITR are billed separately.
+  - Hot partitions (from uneven key distribution) -> throttle costs and latency. Use composite partition keys (`userId#timestamp`)
+
+```yaml
+Version: "2012-10-17"
+Statement:
+  - Effect: Allow
+    Action:
+      - dynamodb:GetItem
+      - dynamodb:PutItem
+      - dynamodb:Query
+      - dynamodb:UpdateItem
+    Resource: arn:aws:dynamodb:us-east-1:123456789012:table/MyAppTable
+```
 
 **RDS**:
-- MySQL, PostgreSQL, MariaDB, Oracle, SQL Server.
-- Storage automatically grows up to max limit.
-- Use IAM tokens for authentication.
-- Always enable multi-AZ deployments, synchronous replication -> Standby in a different AZ.
-- Use read replicas for scale-out reads.
-- Rotate passwords with Secrets Manager and Lambda rotation hooks.
-- Compute and Storage billed separately based on instance size and GB/month respectively
+- **Supported Engines**: MySQL, PostgreSQL, MariaDB, Oracle, SQL Server.
+- **Storage**:
+  - Allocated storage does not shrink, but automatically grows up to max limit if Storage Auto Scaling enabled.
+  - Billing for storage (GB/Month) + IOPS
+- **Authentication**:
+  - Supports IAM Database Authentication (short-lived tokens via `rds-db:connect`).
+- **High Availability**:
+  - Multi-AZ: Synchronous replication. Standby in another AZ. Automated failover (< 60s).
+  - Single-AZ: Cheaper and riskier, only daily snapshot backups.
+- **Scaling**:
+  - Vertifcal scaling only (bigger instance sizes).
+  - Use read replicas (async replication) for read scaling, but not HA.
+- **Operational Practices**:
+  - Rotate creds with Secrets Manager and Lambda rotation hooks to auto update the db password.
+  - Monitor with Enahnced Monitoring and CloudWatch Alarms.
+- **Billing**: Compute (instance type), Storage (GB/month), IOPS separately. Backups beyond retention billed.
 
 - IAM policy for RDS IAM Authentication
 ```json
@@ -94,31 +215,68 @@ aws secretsmanager create-secret \
 ```
 
 **Aurora**:
-- Aurora MySQL, Aurora PostgreSQL.
-- I/O is billed separately per request.
-- Aurora Advanced configs:
-    - `Aurora Clusters`: Writer + up to 15 low-latency read replicas (shared distributed storage).
-    - `Aurora Serverless v2`: Autoscaling CUs, pay per second of usage (good for dev/test, spiky)
-    - `Global DB`: Replicates to multiple AWS regions with sub-second lag.
+- **Engines**: Aurora MySQL & Aurora PostgreSQL.
+- **Architecture**: Writer + up to 15 low-latency read replicas. All share distributed, multi-AZ storage layer (6-way replication across 3 AZs).
+- **Scaling**:
+  - **Aurora Serverless v2**: Auto-scales Aurora Capacity Units (`ACU`), billed per second. Good for bursty/spiky workloads.
+  - **Horizontal scaling** via replicas. Aurora supports reader endpoints with load-balancing.
+- **Global Databases**: Cross-region read replicas with sub-second replication lag. Failover is manual (promote replica).
+- **Billing**:
+  - Compute billed per instance/ACU.
+  - I/O billed separately per request (this is often the hidden cost).
+  - Backups and snapshots billed separately after retention.
 
 
-| Database | Managed? | Scaling               | HA  | Global                 | Cost Control         | Best For          |
-| -------- | -------- | --------------------- | --- | ---------------------- | -------------------- | ----------------- |
-| RDS      | Semi     | Vertical only         | Yes | Read Replicas          | \$\$\$ predictable   | Legacy/OLTP       |
-| Aurora   | Yes      | Horizontal/Serverless | Yes | Global DB              | \$\$–\$\$\$          | Cloud-native apps |
-| DynamoDB | Yes      | Infinite              | Yes | Global Tables          | \$ (pay per request) | Serverless, IoT   |
-| Redshift | Yes      | Cluster resize        | Yes | Cross-region snapshots | \$\$\$ high          | Analytics, BI     |
+**Redshift**
+- **Type**: Fully managed data warehouse for analytics and BI.
+- **Scaling**:
+  - **Elastic Resize**: Quickly change node count.
+  - **Concurrency Scaling**: Temporary extra clusters auto-spin up for heavy query load.
+  - **Spectrum**: Query S3 data directly via external tables.
+- **Availability/Recovery**:
+  - Snapshots automatically replicated to S3. Cross-region snapshot copy supported.
+  - No multi-AZ concept — entire cluster in one AZ, but snapshots provide DR.
+- **Cost**:
+  - Node-hour billing + separate Spectrum query charges.
+  - Reserved instances save up to 75%.
 
-**DocumentDB**:
-- Managed Document db that is MongoDB API compatible. If you have an existing Mongo app with `mongoose`, point to DocumentDB.
-- Pricing is similar to RDS (based on instance type, storage, IOPS).
+
+**DocumentDB**
+- **Type**: Managed MongoDB-compatible API (not true Mongo).
+- **Usage**: Good for lift-and-shift of Mongo apps (e.g., Mongoose ORM). Limited feature parity — no `mapReduce`, certain aggregation stages missing.
+- **HA**: Storage is replicated across 3 AZs. Failover within ~30s.
+- **Scaling**:
+  - Vertical scaling (larger instances).
+  - Read replicas supported.
+- **Cost Model**:
+  - Same as RDS (instance-based compute + storage + IOPS).
+  - Snapshots stored in S3 billed separately.
+
+| Database   | Managed? | Scaling                  | HA                   | Global             | Cost Control            | Best For             |
+| ---------- | -------- | ------------------------ | -------------------- | ------------------ | ----------------------- | -------------------- |
+| RDS        | Semi     | Vertical + read replicas | Multi-AZ failover    | Read Replicas only | \$\$\$ predictable      | Legacy apps, OLTP    |
+| Aurora     | Yes      | Horizontal + Serverless  | Multi-AZ, shared vol | Global DB          | \$\$–\$\$\$ (I/O heavy) | Cloud-native OLTP    |
+| DynamoDB   | Yes      | Infinite (partitioned)   | Multi-AZ by default  | Global Tables      | \$ pay per request      | Serverless, IoT, KV  |
+| Redshift   | Yes      | Cluster + concurrency    | Snapshots (S3 DR)    | Cross-region snaps | \$\$\$ high             | Analytics, BI, DW    |
+| DocumentDB | Yes      | Vertical + read replicas | Multi-AZ storage     | No (single region) | \$\$ like RDS           | Mongo lift-and-shift |
+
+
+
 
 ### S3
+
+**Core Concepts**:
+- **Buckets**: Global namespace containers for objects.
+- **Objects**: Data stored in S3, consisting of:
+  - Key (unique identifier within a bucket).
+  - Value (data payload).
+  - Metadata (system + user-defined).
+- **Regions**: Buckets are created in a specific AWS region and never move.
 
 **S3 Best Practices**:
 - Use bucket policies and IAM for access control.
 
-- Grant the myapp-reader IAM role read-only access to the bucket
+- Grant the **`myapp-reader` IAM role** read-only access to the bucket (readonly.json)
 
 ```json
 {
@@ -138,11 +296,25 @@ aws secretsmanager create-secret \
 ```
 - Attach the policy using `--role-name`, `--policy-name`, and `--policy-document`.
 
-**Storage Classes**: Intelligent Tiering automatically moves data between tiers. Buckets themselves don't have storage classes, the objects inside do.
-- `STANDARD`
-- `STANDARD_IA`
-- `ONEZONE_IA`
-- `GLACIER`
+```bash
+aws iam put-role-policy \
+  --role-name myapp-reader \
+  --policy-name ReadOnlyS3Policy \
+  --policy-document file://readonly.json
+```
+
+**Storage Classes**: Intelligent Tiering automatically moves data between tiers. 
+
+- `STANDARD`: Frequent access, high durability.
+- `STANDARD_IA`: Infrequent access, lower cost.
+- `ONEZONE_IA`: Infrequent access, stored in a single AZ.
+- `GLACIER`/`GLACIER_DEEP_ARCHIVE`: Archival, retrieval required.
+
+- Buckets themselves don't have storage classes, the objects inside do. For example:
+  - **Bucket**: `myapp-data-bucket`
+  - `logs/2025-04-04.json` -> GLACIER
+  - `images/banner.jpg` -> STANDARD
+  - `reports/monthly.csv` -> INTELLIGENT_TIERING
 
 - Data protection using **Oject Lock** (Write Once, Read Many (WORM) compliance).
 
@@ -172,26 +344,239 @@ aws secretsmanager create-secret \
 }
 ```
 
+- **Versioning** protects against accidental overwrite or deletion. Versioning is required for Object Lock and replication.
+
+- Using the low-level aws s3api API interface to modify the versioning:
+  - Overwrites and deletes do not erase data, they create new versions.
+
+```bash
+# Every new object version is uniquely stored.
+aws s3api put-bucket-versioning \
+  --bucket myapp-prod \
+  --versioning-configuration Status=Enabled
+```
+
+- When you enable versioning, every `PUT` creates a new version, not a replacement. Every `DELETE` creates a delete marker, not a true deletion. `Version IDs` are assigned to each object.
+  - Versioning can not be disabled, only suspended.
+
+- **Encryption**
+  - In Transit: TLS/SSL
+  - At Rest: 
+    - SSE-S3: AWS Managed Keys.
+    - SSE-KMS: Customer Managed KMS Keys.
+    - Client-side encryption: Encrypt before upload
+
+- Example Bucket Encryption using SSE-KMS, a specific KMS key `abcd-efgh`.
+  - If a PUT request does not specify encryption, S3 will automatically apply the KMS Key.
+  - Existing objects are not retroactively encrypted
+
+```bash
+# Example Bucket Encryption (SSE-KMS)
+aws s3api put-bucket-encryption \
+  --bucket myapp-prod \
+  --server-side-encryption-configuration '{
+    "Rules": [{
+      "ApplyServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "aws:kms",
+        "KMSMasterKeyID": "arn:aws:kms:us-east-1:123456789012:key/abcd-efgh"
+      }
+    }]
+  }'
+```
+
+- Use **CloudTrail** to track `Decrypt`, `Encrypt`, and `GenerateDataKey` events.
+- Enforce encryption at the bucket level and deny uploads that do not use SSE-KMS.
+- Inspect an object to see if SSE was used `aws s3api head-object --bucket mybucket --key path/to/object.txt`
+
+### Elastic Beanstalk
+
+AWS Elastic Beanstalk is a PaaS service that simplifies deployments and scaling of web apps and services. It provides a managed environment that handles provisioning, load balancing, and auto-scaling of underlying AWS resources. Less granular control than ECS/EKS. **It abstracts EC2, ELB, AutoScaling Groups, and CloudWatch**.
+
+**Core Concepts and Platforms**
+- Application: A logical container for your app.
+- Application Version: A specific, deployable artifact of your app in `.jar` or `.war` (or `.zip`) format, uploaded to S3.
+- Environment: An instance-specific app version running on a chosen stack. Each env is a collection of resources (Ec2. ALB, Auto Scaling Group, etc) managed by Beanstalk.
+- Platforms (Java): Corretto (Standalone Java SE application, ideal for Spring Boot apps) and Tomcat (traditional Java web apps from WAR files to a managed Tomcat server)
+- Configuration: Managed via EB console, `ebextensions/` or `.ebignore` + `Dockerrun.aws.json`.
+
+**Customizing the Environment**
+- Place `.ebextensions` folder in the root of the app source bundle, includes additional configuration files.
+  - `.config`: Install additional packages.
+  - `container_commands`: Run custom scripts.
+  - `nginx.conf`: Modify server configuration.
+  - `JAVA_TOOL_OPTIONS`: Env variable for JVM customizations (also JAVA_OPTS, JVM_ARGS).
+
+**Deployment Strategies**
+- All at once: NOT recommended, causes downtime.
+- Rolling: Updates a batch of instances at a time. Rest of instances serve traffic.
+- Rolling with additional batch: A new batch of instances is added to the env before updating the old instances.
+- **Immutable**: Safest method for zero-downtime deployments. A new Auto Scaling Group is provisioned with new instances running the new version. Once instances are heavy, traffic is swapped. 
+
+**Deployment Pipeline**
+1. Build artifact (Maven/Gradle -> JAR/WAR)
+2. Upload to S3 with `aws elasticbeanstalk create-application-version`
+3. Deploy via:
+- CLI: `aws elasticbeanstalk create-application-version`
+- EB CLI: `eb deploy`
+
+```bash
+# Example: upload + deploy
+aws elasticbeanstalk create-application-version \
+  --application-name myservice \
+  --version-label v1.0.0 \
+  --source-bundle S3Bucket="my-bucket",S3Key="builds/myservice-v1.0.0.jar"
+
+aws elasticbeanstalk update-environment \
+  --environment-name myservice-prod \
+  --version-label v1.0.0
+```
+
+**Architecture Pattern**
+- Each microservice = separate EB app + environment.
+- Shared services like DB, Redis, Kafka live outside of EB.
+- Prefer ALBs for routing.
+- Integrate with Route53 for DNS and service discovery.
+- Use VPC-enabled environments with private subnets + NAT Gateways.
+- Configure min/max instance counts and set scaling triggers.
+
+**Best Practices and Notes**
+- Extend metrics with Micrometer/Prometheus JMX Exporter sidecar.
+- For Secrets, integrate with Secret Manager and SSM Parameter Store.
+- Use Amazon Linux 2 instances for long term support.
+- Pin dependencies to external services.
+
+- Example .ebextensions/01-env.config
+
+```yaml
+option_settings:
+  aws:elasticbeanstalk:application:environment:
+    SPRING_PROFILES_ACTIVE: prod
+    JAVA_OPTS: "-Xms512m -Xmx1024m"
+  aws:autoscaling:launchconfiguration:
+    InstanceType: t3.medium
+  aws:elasticbeanstalk:environment:
+    ServiceRole: "arn:aws:iam::123456789012:role/eb-service-role"
+```
+
 ### CloudWatch
 
-- CloudWatch is deeply service integrated, with most AWS services emitting metrics automatically.
+- CloudWatch, a monitoring and observability service, is deeply integrated with other AWS services, with most AWS services emitting metrics automatically.
 
 **Core Components**:
 1. `Metrics`: 
-- Numerical time-series data (CPUUtilization, Latency).
-- Granularity: 1 minute is standard, 1-second for custom metrics at the lowest.
+- Numerical time-series data published by AWS services or custom apps (CPUUtilization, Latency. RequestCount).
+- Granularity: Standard resolution == 1 minute, High resolution == 1-second for custom metrics or select AWS services.
+
+- Publish a custom metric:
+
+```bash
+aws cloudwatch put-metric-data \
+  --metric-name PageLoadTime \
+  --namespace MyApplication \
+  --unit Seconds \
+  --value 1.45
+```
+- Best Practices:
+  - Use namespaces to organize metrics logically.
+  - Standardize dimensions (e.g. InstanceId, Environment) for query efficiency.
+  - Enable high resolution metrics only where required for the cost/performance tradeoff.
+
 2. `Logs`:
 - Centralized log storage & query via CloudWatch Logs Insights.
-- Supports ingestion from **Lambda**, **ECS**, **EKS**, **EC2**, **VPC Flow Logs**, **ALB Logs**.
+- Supports ingestion from **Lambda**, **ECS**, **EKS**, **EC2**, **VPC Flow Logs**, **ALB/ELB Logs**, **customApps**.
 - Retention is configurable per log group (days -> indefinite)
+
+- Query logs:
+
+```bash
+aws logs start-query \
+  --log-group-name /aws/lambda/my-function \
+  --start-time 1694300000 \
+  --end-time 1694303600 \
+  --query-string "fields @timestamp, @message | sort @timestamp desc | limit 20"
+```
+
+- Best Practices:
+  - Use structured logging (JSON) for easier queries.
+  - Configure log retention policies to manage costs.
+  - Protect sensitive data before logging (avoid secrets, PII)
+
 3. `Alarms`:
 - Threshold-based alerts on metrics.
-- Actions: SNS, AutoScaling, EventBridge, Systems Manager.
+- Types: Can be statistic thresholds (CPU > 80%) or Anomaly detection (dynamic thresholds using ML)
+- Actions: Can trigger SNS notifications, AutoScaling policies, EventBridge rules, Systems Manager automation.
+
+- Create a CloudWatch Alarm of a specific EC2 instance must be triggered twice:
+  - If triggered, will publish a message to the SNS topic `NotifyMe`
+
+```bash
+aws cloudwatch put-metric-alarm \
+  --alarm-name HighCPUAlarm \
+  --metric-name CPUUtilization \
+  --namespace AWS/EC2 \
+  --statistic Average \
+  --period 300 \
+  --threshold 80 \
+  --comparison-operator GreaterThanThreshold \
+  --dimensions Name=InstanceId,Value=i-1234567890abcdef0 \
+  --evaluation-periods 2 \
+  --alarm-actions arn:aws:sns:us-east-1:111122223333:NotifyMe
+```
+
+
 4. `Events (EventBridge)`:
-- Formerly CloudWatch Events.
-- Rule-based event bus (trigger Lambda on EC2 instance State=stopped)
+- Formerly CloudWatch Events. Delivers real-time event streams from AWS services and SaaS apps.
+- Rule-based event bus (trigger Lambda on EC2 instance `State=stopped`).
+
+- Event Rule for EC2 Instance State Change:
+
+```bash
+aws events put-rule \
+  --name EC2StopRule \
+  --event-pattern '{
+    "source": ["aws.ec2"],
+    "detail-type": ["EC2 Instance State-change Notification"],
+    "detail": { "state": ["stopped"] }
+  }'
+```
+
+- Best Practices:
+  - Use **event buses** to separate environments (e.g., prod, dev).
+  - Apply **dead-letter queues (DLQ)** for undeliverable events.
+  - Prefer **EventBridge Pipes** for transformations before consumption.
+
 5. `Dashboards`:
-- Custom visualiation of metrics and logs across accounts.
+- Custom visualiation of metrics, alarms and logs across accounts.
+- Cam aggregate across many accounts and regions.
+
+- Create a Dashboard for CPU Utilization:
+
+```bash
+aws cloudwatch put-dashboard \
+  --dashboard-name MyAppDashboard \
+  --dashboard-body '{
+    "widgets": [
+      {
+        "type": "metric",
+        "x": 0,
+        "y": 0,
+        "width": 12,
+        "height": 6,
+        "properties": {
+          "metrics": [
+            [ "AWS/EC2", "CPUUtilization", "InstanceId", "i-1234567890abcdef0" ]
+          ],
+          "title": "EC2 CPU Utilization"
+        }
+      }
+    ]
+  }'
+```
+
+- Best Practices:
+  - Use **tag-based metrics selection** to make dashboards reusable.
+  - Share dashboards with **cross-account IAM roles** for centralized visibility.
+  - Use dashboards alongside **CloudWatch Synthetics Canaries** for user experience monitoring.
 
 #### EKS
 
@@ -240,10 +625,10 @@ resource "aws_cloudwatch_log_group" "eks_app" {
 
 #### S3
 
-- Enable S3 Storage Metrics (BucketSizeBytes, NumberOfObjects) and monitor per-bucket dashboards to visualize growth.
+- Enable S3 Storage Metrics (`BucketSizeBytes`, `NumberOfObjects`) and monitor per-bucket dashboards to visualize growth.
 - Enable CloudWatch Request Metrics per bucket/prefix or operation. (GetRequests, PutRequests, 4xxErrors).
 
-- S3 Event Notifications via CloudWatch/EventBridge:
+- **S3 Event Notifications** via CloudWatch/EventBridge:
     - S3 emits events like PutObject to AWS EventBridge, where rules can match events
     - The target would be an arn: `arn:aws:lambda:us-west-2:123456789012:function:ValidateFile`
 
@@ -265,7 +650,7 @@ resource "aws_cloudwatch_log_group" "eks_app" {
     - Throttles
     - IteratorAge (for streams)
 - Logs from `console.log`, CloudWatch Logs automatically.
-- Trigger alarms if Errors > 0 or Duration > 90th percentile.
+- Trigger alarms if `Errors > 0` or `Duration > 90th percentile`.
 
 #### CloudTrail
 

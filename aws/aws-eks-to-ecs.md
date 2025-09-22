@@ -160,7 +160,9 @@ spec:
       storage: 1Gi
 ```
 
-- ECS Equivalent (execution role is equivalent to imagePullSecrets)
+- ECS Equivalent Task Definition and Service. The Task Definition is a blueprint for your app, while the Service is what runs and manages the blueprint. The Service takes the task defintion and makes seure the specified number of copies/tasks are running and constantly healthy.
+
+- Task Definition:
 
 ```json
 {
@@ -224,7 +226,20 @@ spec:
 }
 ```
 
-- ECS Service Definition:
+- `"family": "microservice-app"`: Task definition family, used to group multiple revisions of the same task def.
+- `"networkMode": "awsvpc"`: Each task gets its own ENI, private IP and can use SGs like EC2 instances.
+- `"cpu": "512"`: The maximum CPU allocated to the task. CPU usage may be throttled if attempting to go higher.
+- `"memory": "1024"`: Max memory the task can use, will be terminated with OOM if it exceeds the limit.
+- `"executionRoleArn": "arn:aws:iam::account:role/ecsTaskExecutionRole"`: Pull container images/write CloudWatch Logs.
+- `"taskRoleArn": "arn:aws:iam::account:role/ecsTaskRole"`: Containers assume this role at runtime for Dynamo,S3, etc.
+- `"containerPort"`: 8080: ECS forwards traffic to port 8080 inside the container.
+- `"cpu": 256` and `"memoryReservation": 256`: CPU and memory reservation for the container. A request not a limit.
+- `"memory": 512`: Hard memory limit for the container, it may be killed if it exceeds or restarted.
+- `"mountPoints": [...]`: Mounts a volume named app-storage inside the container at path /data. Writable.
+- `"logConfiguration": {...}`: Uses AWS CloudWatch Logs driver for container logs. Prefixed with ecs.
+- `"volumes": [...]`: Declares a volume named app-storage backed by AWS EFS at the task level.
+
+- Service Definition:
 
 ```json
 {
@@ -247,5 +262,31 @@ spec:
       "containerPort": 8080
     }
   ]
+}
+```
+
+- `"taskDefinition": "web-app"`: Service applies to the web-app task definition that defines the web-app container.
+- `"desiredCount": 3`: ECS ensures 3 tasks are running at all times.
+- `"subnets": ["subnet-abc123", "subnet-def456"]`: The VPC subnets where the ENIs will be placed.
+- `"securityGroups": ["sg-xyz789"]` — Security groups applied to the task ENIs controlling inbound/outbound traffic.
+- `"assignPublicIp": "ENABLED"` — Assigns a public IP address to each task for internet accessibility.
+- `"targetGroupArn"` — ARN of the ELB target group that routes traffic to the tasks.
+
+- An internal application would have PublicIP disabled:
+
+```json
+{
+  "serviceName": "internal-microservice-service",
+  "cluster": "your-cluster-name",
+  "taskDefinition": "internal-microservice",
+  "desiredCount": 2,
+  "launchType": "FARGATE",
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": ["subnet-private1", "subnet-private2"],
+      "securityGroups": ["sg-internal-service"],
+      "assignPublicIp": "DISABLED"
+    }
+  }
 }
 ```
