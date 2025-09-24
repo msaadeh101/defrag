@@ -1,0 +1,12 @@
+replicaCount: 3
+
+image:
+  tag: v1.2.3 # The tag for production, updated by automation
+
+resources:
+  requests:
+    cpu: "250m"
+    memory: "512Mi"
+  limits:
+    cpu: "500m"
+    memory: "1Gi"

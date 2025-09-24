@@ -1,0 +1,26 @@
+postgresql:
+  enabled: true
+  auth:
+    username: admin
+    password: changeme
+    database: mydb
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+redis:
+  enabled: false   # disabled by default
+  architecture: standalone
+  auth:
+    enabled: true
+    password: redispass
+
+messaging:          # rabbitmq alias
+  enabled: true
+  auth:
+    username: user
+    password: rabbitpass
+  persistence:
+    enabled: true
+    size: 8Gi

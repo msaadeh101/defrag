@@ -1,0 +1,65 @@
+# Values for the External Secrets Operator Helm Chart
+replicaCount: 2
+
+serviceAccount:
+  create: true
+  name: external-secrets-argocd-sa
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT_ID:role/CLUSTER_NAME-external-secrets-argocd"
+
+securityContext:
+  fsGroup: 65534
+  runAsNonRoot: true
+  runAsUser: 65534
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+nodeSelector:
+  kubernetes.io/os: linux
+
+podSecurityContext:
+  fsGroup: 65534
+
+metrics:
+  service:
+    enabled: true
+    port: 8080
+  serviceMonitor:
+    enabled: true
+    namespace: external-secrets-system
+
+webhook:
+  port: 9443
+  hostNetwork: false
+  image:
+    repository: ghcr.io/external-secrets/external-secrets
+    tag: v0.9.11
+
+certManager:
+  enabled: true
+  cert:
+    duration: 8760h # 1 year
+    renewBefore: 720h # 30 days
+
+env:
+  POLLER_INTERVAL_MILLISECONDS: 300000  # 5 minutes
+  LOG_LEVEL: info
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - external-secrets
+        topologyKey: kubernetes.io/hostname

@@ -17,12 +17,61 @@
 
 **ArgoCD** is a declarative, GitOps continuous delivery tool for Kubernetes. Examples relate to Terraform/Helm/AWS.
 
+### Concepts
+
+- Application: Group of K8 resources defined by a manifest. A CRD.
+- Application source type: Which tool is used to build the app.
+- Tool: A tool to create manifests from a directory of files.
+- Sync Status: Does the live state match the target state?
+- Sync: Force an application to match with target state by applying changes to cluster. Check if succeeded by Sync operation status.
+- Health: Is the app running? Can it serve requests?
+
+### Components
+
+| Component | Function | Port |
+|-----------|----------|------|
+| **API Server** | gRPC/REST API, UI backend, RBAC enforcement | 8080/8083 |
+| **Repo Server** | Git repository operations, manifest generation, clones the repo/parses manifests | 8081 |
+| **Application Controller** | Kubernetes resource monitoring, sync operations, detects drift | N/A |
+| **Redis** | Caching layer for improved performance | 6379 |
+| **Dex** | OIDC authentication provider (optional), SSO via OAuth2, LDAP, SAML | 5556/5557 |
+| **ApplicationSet Controller** | Multi-cluster/tenant app generation | N/A |
+
 ### Key Benefits
 - GitOps workflow with Git as single source of truth: Enables auditing and compliance.
 - Declarative application management: Applications are defined ONCE in git, and ArgoCD continuously reconciles. Drift detection ensures EKS manifests match git manifests.
 - Multi-cluster deployment support: Supports dev/stage/prod clusters across AWS accounts. (`argocd app set --dest-server=https://<prod-eks-api>`).
 - Rich UI and CLI tools: Use `argocd` cli tool to script.
 - Integration with AWS services
+
+### Advanced Details
+
+#### ApplicationSet
+
+The ApplicationSet Controller adds support for ApplicationSet CRD. It is used to deploy many apps inherited from a dynamic generator and template, as opposed to a static yaml.
+
+#### TLS
+
+- ArgoCD provides **3 inbound TLS endpoints**: By default, they use auto-generated self-signed certs.
+1. `argocd-server` (user-facing). Configure with either `argocd-server-tls` secret or `argocd-secret` for PEM data/private key.
+2. `argocd-repo-server` (accessed by `argocd-server` and `argocd-application-controller`). Configure secret named `argocd-repo-server`.
+3. `argocd-dex-server` (accessed by argocd-server for OIDC auth). Configure secret named `argocd-dex-server-tls`.
+- To make connections between components more secure, create a persistent TLS cert used by the `argocd-repo-server`, restart the `argocd-repo-server` pods, and modify the start up params for the server and app controler to include `--repo-server-strict-tls` flag.
+
+#### Ingress
+- By default, ArgoCD is deployed without a public endpoint. You need to configure an ingress to access it from outside the cluster. 
+  - Use Contour For a Private ArgoCD UI with multiple Ingress Objects, use an ingress for each HTTPS/private gRPC, HTTPS SSO callbacks. [Docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/ingress/).
+
+#### User Management
+- ArgoCD has a built-in admin, once initial configuration is complete, switch to SSO integration. SSO can be configured by either the bundled Dex or existing OIDC provider (keycloak, Auth0, OneLogin)
+  - Dex: Register the application in the identity provider (`https://argocd.example.com/api/dex/callback`), and input the client id/secret in the configmap (`dex.config`)
+  - Existing provider: Add the OAuth2 config in the `argocd-cm` under `oidc.config` (i.e. `name: Okta`, `issuer`, `clientID`, etc.)
+
+#### Webhook Management
+
+- Using a Webhook endpoint (`https://argocd.example.com/api/webhook`) you can configure your git webhook.
+  - `webhook.gitlab.secret`: If argoCD is publicly accessible, then a webhook secret is recommended to prevent DDoS.
+
 
 ## Prerequisites
 
@@ -46,6 +95,33 @@ argocd version      # >= 2.9
 
 - Optional tools: kustomize (for overlays per env), sops (for encrypted secrets), jq (for automation and scripting)
 
+### Secrets Architecture
+
+```mermaid
+graph TB
+    A[AWS Secrets Manager] --> B[External Secrets Operator]
+    B --> C[Kubernetes Secrets]
+    C --> D[ArgoCD Components]
+    
+    E[Parameter Store] --> B
+    F[IAM IRSA] --> B
+    G[KMS] --> A
+    G --> E
+    
+    subgraph "EKS Cluster"
+        B
+        C
+        D
+        H[ArgoCD Server]
+        I[ArgoCD Controller]
+        J[Repo Server]
+    end
+    
+    C --> H
+    C --> I
+    C --> J
+```
+
 ### Quickstart Worflow
 1. Infra with Terraform:
 - Provision EKS, ALB, IAM Roles, Policies, Secrets Manager
@@ -58,6 +134,7 @@ argocd version      # >= 2.9
 4. Continuous Delivery:
 - Commit an updated tag -> ArgoCD detects change -> Deploys new version.
 - Argo Rollouts for Canary/Blue-Green Deployments.
+
 
 ## Installation
 
@@ -109,6 +186,15 @@ module "eks" {
   # Enable IRSA
   enable_irsa = true
 
+  # EBS CSI driver add-on configuration
+  cluster_addons = {
+    aws-ebs-csi-driver = {
+      most_recent = true
+      # For IRSA-based authentication with the service account
+      service_account_role_arn = module.ebs_csi_irsa_role.iam_role_arn
+    }
+  }
+
   tags = var.common_tags
 }
 
@@ -127,6 +213,23 @@ module "aws_load_balancer_controller_irsa_role" {
       namespace_service_accounts = ["kube-system:aws-load-balancer-controller"]
     }
   }
+}
+
+# Create an IRSA role for the EBS CSI driver
+module "ebs_csi_irsa_role" {
+  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
+  version = "~> 5.0"
+
+  role_name             = "${var.cluster_name}-ebs-csi-driver-irsa"
+  attach_ebs_csi_policy = true
+  oidc_providers        = [module.eks.oidc_provider_arn]
+  namespace_service_accounts = [
+    {
+      namespace = "kube-system"
+      service_account = "ebs-csi-controller-sa"
+    }
+  ]
+  tags = var.common_tags
 }
 ```
 
@@ -201,6 +304,41 @@ helm repo update
 
 # Create namespace
 kubectl create namespace argocd
+# Install ArgoCD with HA configuration (manifest approach)
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/ha/install.yaml
+
+# Patch service for AWS Load Balancer
+kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}'
+# Configure AWS ALB Ingress (recommended for production)
+cat <<EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server-ingress
+  namespace: argocd
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/backend-protocol: HTTPS
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:REGION:ACCOUNT:certificate/CERT_ID
+spec:
+  rules:
+  - host: argocd.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argocd-server
+            port:
+              number: 443
+EOF
+
+# Retrieve initial admin password
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 ```
 
 - Helm values.yaml override file when using the official helm chart
@@ -292,8 +430,10 @@ applicationSet:     # Used dynamicallly to create new apps. Deploys the same mic
   enabled: true
 ```
 
+- Install ArgoCD - Helm Approach:
 ```bash
-# Install ArgoCD, must already be authenticated to cluster
+# Install ArgoCD, must already be authenticated to cluster, argocd namespace exists
+# Installs from official helm chart, not manifests
 helm install argocd argo/argo-cd \
   --namespace argocd \
   --values argocd-values.yaml \
@@ -1640,6 +1780,7 @@ spec:
 
 ### 2. Custom Health Checks
 
+- Defines a custom healthcheck for an Argo Rollout, defining what is healthy.
 ```yaml
 # custom-health.yaml
 apiVersion: v1
@@ -1674,24 +1815,38 @@ metadata:
   name: argocd-notifications-cm
   namespace: argocd
 data:
-  service.webhook.github: |
-    url: https://api.github.com
+  service.webhook.jenkins: |
+    url: https://jenkins.example.com/generic-webhook-trigger/invoke
     headers:
     - name: Authorization
-      value: token $github-token
-  
+      value: Bearer $jenkins-token
+
   template.app-deployed: |
     webhook:
-      github:
+      jenkins:
         method: POST
-        path: /repos/{{.app.spec.source.repoURL | call .repo.RepoURLToHTTPS | call .repo.FullNameByRepoURL}}/statuses/{{.app.status.operationState.operation.sync.revision}}
         body: |
           {
-            "state": "success",
-            "target_url": "{{.context.argocdUrl}}/applications/{{.app.metadata.name}}",
-            "description": "ArgoCD",
-            "context": "continuous-delivery/{{.app.metadata.name}}"
+            "application": "{{.app.metadata.name}}",
+            "status": "deployed",
+            "revision": "{{.app.status.operationState.operation.sync.revision}}",
+            "url": "{{.context.argocdUrl}}/applications/{{.app.metadata.name}}"
           }
+```
+
+- Apply manifest and then Create the secret:
+```bash
+kubectl apply -f argocd-notifications-cm.yaml
+kubectl create secret generic argocd-notifications-secret \
+  --namespace argocd \
+  --from-literal=jenkins-token=<your-token>
+```
+- Create the triggers Config Map (different than above):
+```yaml
+triggers:
+  - name: on-sync-success
+    condition: app.status.operationState.phase == "Succeeded"
+    template: app-deployed
 ```
 
 ### 4. Progressive Delivery with Argo Rollouts
@@ -2062,5 +2217,3 @@ spec:
       - pause:
           duration: 15m
 ```
-
-This wiki provides comprehensive coverage of ArgoCD deployment and management on AWS. Each section includes practical examples and follows AWS best practices for production deployments.

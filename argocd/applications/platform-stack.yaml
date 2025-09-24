@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-stack
+  namespace: argocd
+spec:
+  project: microservices
+  source:
+    repoURL: https://gitlab.example.com/team/microservices-gitops
+    path: helm/platform-stack
+    targetRevision: main
+    helm:
+      valueFiles:
+        - values.yaml              # base defaults
+        - values-production.yaml   # env-specific overrides (if needed)
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: platform-stack
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
