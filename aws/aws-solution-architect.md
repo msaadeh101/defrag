@@ -465,29 +465,404 @@ RedisReplicationGroup:
 ```
 
 ### Decoupling Components
-- SQS (Standard vs FIFO) and dead letter queues
-- SNS fan-out patterns and message filtering
-- EventBridge rule patterns and cross-account events
-- Step Functions state machines and error handling
-- API Gateway throttling and caching strategies
+
+**SQS**: Simple Queue Service. message queue service that enables asynch communication between distributed components. Different **Queue Types**.
+- **Standard**: Delivery guarantee, best effort ordering, but messages may arrive out of order. Unlimited throughput. Use when occaisional duplicate messages are acceptable/order not critical.
+- **FIFO**: Exactly-once processing, deduplication enabled by default. Guaranteed ordering. 300 (standard) - 3000 (premium) messages/second throughput. Requires MessageGroupId for ordering, and deduplication token to work properly. Used for financial transactions, inventory management, order processing.
+```json
+{
+  "QueueName": "transaction-queue.fifo",
+  "FifoQueue": true,
+  "ContentBasedDeduplication": true,
+  "MessageRetentionPeriod": 86400,
+  "VisibilityTimeout": 60,
+  "DeduplicationScope": "messageGroup",
+  "FifoThroughputLimit": "perMessageGroupId"
+}
+```
+- **DLQ (dead letter)**: Captures messages that failed to process after x number of attempts.
+- Use *batch processing* to improve API call efficiency:
+```python
+with ThreadPoolExecutor(max_workers=5) as executor:
+    receipt_handles = list(executor.map(process_message, messages))
+```
+- Visibility timeout prevents duplicate processing by hiding messages from other consumers during processing.
+
+**SNS**: Simple Notification Service: Pub-Sub messaging service for one-to-many message distribution with support for multiple protocol endpoints. SNS uses **Topics** as communication channels, *publishers* send messages to topics, and *subscribers* receive notifications. 
+- **Protocols**: `SQS`, `Lambda`, `HTTP(S)`,` Email`/`E-JSON`, `SMS`, `Application` (mobile push notifications).
+- Create an SNS topic (order-events) and subscribe an SQS queue to the topic:
+```bash
+aws sns create-topic --name order-events
+aws sns subscribe \
+    --topic-arn arn:aws:sns:us-east-1:123456789012:order-events \
+    --protocol sqs \
+    --notification-endpoint arn:aws:sqs:us-east-1:123456789012:order-queue
+```
+- **Fan-out pattern** enables one message to trigger multiple parallel workflows, good for event-driven architectures. (i.e. an order is created, and SNS delivers a message to inventory, notification, and analytic systems simultaneously).
+- Message filtering: Filter policies reduce unnecessary processing (only messages with matching attributes are delivered to certain subscriber). 
+```bash
+aws sns set-subscription-attributes \
+    --subscription-arn arn:aws:sns:us-east-1:123456789012:order-events:12345678 \
+    --attribute-name FilterPolicy \
+    --attribute-value '{"eventType":["order-created"]}'
+```
+- *Dead Letter Queue Integration*: SNS can route failed deliveries to SQS Dead-Letter Queues for reply/investigation.
+
+**EventBridge**: Serverless event bus that routes events from AWS services, custom apps, and SaaS to multiple targets (*even cross account*) with rule-based routing. Patterns can match on `source`, `detail-type`, or `detail` fields.
+- Events follow standard JSON, with metadata and payload.
+```json
+{
+  "version": "0",
+  "id": "6a7e8feb-b491-4cf7-a9f1-bf3703467718",
+  "detail-type": "EC2 Instance State-change Notification",
+  "source": "aws.ec2",
+  "account": "123456789012",
+  "time": "2024-10-07T12:34:56Z",
+  "region": "us-east-1",
+  "resources": ["arn:aws:ec2:us-east-1:123456789012:instance/i-1234567890abcdef0"],
+  "detail": {
+    "instance-id": "i-1234567890abcdef0",
+    "state": "terminated"
+  }
+}
+```
+- EventBridge routes events to Lambda, SNS, SQS, Step Functions, API Gateway, and other SaaS providers (Slack, PagerDuty, Datadog).
+**Step Functions**: Serverless orchestration service for coordinating distributed workflows, long-running processes, complex business logic with *visual workflows* and *error handling*. 
+- State machine types include standard and express workflows.
+  - **Standard Workflow**: Runs for up to `1 year`, exactly-one-execution semantics, full audit trail. Good for business processes, order fulfillment, data pipelines.
+  - **Express Workflow**: Runs for up to `5 minutes`, at least-once-execution. Optimized for high-volume, event driven scenarios. Synchronous or asynchronous. Stream processing, API backends, real-time responses.
+- Retries implement exponential backoff to handle transient errors gracefully:
+```json
+{
+  "ErrorEquals": ["States.TaskFailed"],
+  "IntervalSeconds": 1,
+  "MaxAttempts": 5,
+  "BackoffRate": 2.0
+}
+```
+
+**API Gateway**: Fully managed service for creating/publishing/monitoring/securing APIs at scale. Acts as the front-door for apps to access data/business logic and more. Its a reverse proxy that sits between the client app and backend services.
+- Flow: `Client request -> Request Processing -> Backend Call/Response -> Response Processing`
+- During the request processing, API gateway handles the authentication/authorization, throttling, caching (if enabled) and mappings/transformations (optional)
+- **Throttling**: Protects backend systems from overload, default 10,000 RPS soft limit. Can apply at the account-level or API-level.
+- **Caching**: Stores API responses in an in-memory cache at the edge for a TTL period, reducing backend load. *Tradeoff*: Cache invalidation complexity vs performance gains.
+```yaml
+OrderAPIMethod:
+  Type: AWS::ApiGateway::Method
+  Properties:
+    RestApiId: !Ref OrderAPI
+    ResourceId: !Ref OrderAPIGWResource
+    HttpMethod: POST
+    AuthorizationType: AWS_IAM
+    Integration:
+      Type: AWS_PROXY
+      IntegrationHttpMethod: POST
+      Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:states:action/StartSyncExecution'
+      Credentials: !GetAtt APIGatewayRole.Arn
+      RequestTemplates:
+        application/json: |
+          {
+            "stateMachineArn": "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:order-processor",
+            "input": "$input.json('$')"
+          }
+```
+- Cache Invalidation:
+```bash
+# Flush entire cache
+aws apigateway flush-stage-cache \
+    --rest-api-id r3pmxmplak7b7a \
+    --stage-name prod
+# Invalidate specific resource
+aws apigateway delete-stage-cache \
+    --rest-api-id r3pmxmplak7b7a \
+    --stage-name prod \
+    --resource-path "/orders/{orderId}"
+```
 
 ### Disaster Recovery
-- RTO/RPO requirements and DR strategies
-- Backup and restore vs pilot light vs warm standby vs multi-site
-- Cross-region replication for S3, RDS, DynamoDB
-- Database backup strategies and point-in-time recovery
+
+**RTO/RPO**: **Recovery Time Objective** is the max downtime before restoration is required (minutes/hours). **Recovery Point Objective** is the max data loss measured in time. Data newer than RPO is lost in a disaster.
+- **Trafeoffs (RTO vs RPO)** highest to lowest cost:
+  - *Zero RTO/RPO* requires always-on replication and multi-region active-active environments.
+  - *Short RTO* (minutes) with RPO (hours) uses automated failover with asynchronous replication.
+  - *Extended RTO* (hours) with *extended RPO* (days) can use backup-restore approaches
+
+**DR strategies**:
+1. **Backup and Restore**: Regular backups to secondary region, manual restoration on disaster.
+- Lowest cost, highest RTO/RPO
+- **RTO**: Hours - Days, **RPO**: Hours - Days
+```bash
+# Automated daily snapshots
+aws ec2 create-snapshot \
+    --volume-id vol-1234567890abcdef0 \
+    --description "Daily backup $(date +%Y-%m-%d)"
+# Copy snapshot to DR region
+aws ec2 copy-snapshot \
+    --source-region us-east-1 \
+    --source-snapshot-id snap-1234567890abcdef0 \
+    --destination-region us-west-2 \
+    --description "DR backup"
+```
+2. **Pilot Light**: Continuous replication, minimal instances running, scale on failover.
+- Minimal infra running in DR region.
+- **RTO**: 10-15 min, **RPO**: 5-15 min
+3. **Warm Standby**: Continuous replication, scaled down infra with traffic shift on failover.
+- Fully functional but reduced-capacity environment.
+- **RTO**: 5-10 min, **RPO**: 1-5 min
+- **Route53** health checks can automatically shift during traffic outages.
+```json
+{
+  "Type": "A",
+  "Name": "app.example.com",
+  "SetIdentifier": "Primary",
+  "Failover": "PRIMARY",
+  "TTL": 60,
+  "ResourceRecords": ["203.0.113.1"],
+  "HealthCheckId": "primary-health-check"
+},
+{
+  "Type": "A",
+  "Name": "app.example.com",
+  "SetIdentifier": "Standby",
+  "Failover": "SECONDARY",
+  "TTL": 60,
+  "ResourceRecords": ["198.51.100.2"]
+}
+```
+4. **Multi-Site (Active-Active)**: Traffic distributed with automatic failover. Fully active infrastructure in multiple regions.
+- **RTO**: Seconds, **RPO** ~zero.
+- *Highest cost* with continous synchronization.
+- Example: Use DynamoDB global tables for active-active multi-region.
+```bash
+aws dynamodb create-global-table \
+    --global-table-name orders \
+    --replication-group RegionName=us-east-1 RegionName=eu-west-1 RegionName=ap-southeast-1
+```
+
+**Cross-region replication**: CRR for S3, RDS and DynamoDB.
+- **S3 CRR**: Automatically replicates new objects asynch to another bucket in a different region. Good for compliance, low-latency access and DR.
+- **RDS**: Supports cross-region read replicas (MySQL, PostgreSQL, Aurora) that can be promoted to standalone instances during a failover. Read replicas require manual promotion.
+- **DynamoDB Global Tables**: Fully managed multi-region, multi-master replication. Ensuring low RPO with writes (last write wins) propagated across regions with eventual consistency.
+
+**Database Backup Strategies**:
+- RDS Automated backups capture daily snapshots/transaction logs, enabling PITR up to 35 days.
+- DynamoDB PITR enables recovery at any point up to 35 days, protecting against accidental deletions or bugs.
+```bash
+aws dynamodb update-continuous-backups \
+    --table-name OrderTable \
+    --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+# Restore to specific point in time
+aws dynamodb restore-table-to-point-in-time \
+    --source-table-name OrderTable \
+    --target-table-name OrderTable-Restored \
+    --use-latest-restorable-time
+```
+- On-Demand backups are manual and can be created for critical databases before major changes or maintenance, providing indefinite retention.
+```bash
+aws rds create-db-snapshot \
+    --db-instance-identifier prod-database \
+    --db-snapshot-identifier prod-database-pre-migration-$(date +%Y%m%d-%H%M%S)
+
+# Create backup job with lifecycle rules
+aws dlm create-lifecycle-policy \
+    --execution-role-arn arn:aws:iam::123456789012:role/dlm-role \
+    --description "Daily RDS snapshots with 30-day retention" \
+    --state ENABLED \
+    --policy-details \
+        PolicyType=EBS_SNAPSHOT_MANAGEMENT,ResourceTypes=VOLUME,TargetTags=BackupEnabled=true
+```
+- **Simulate and Test RDS Failover**: Convert existing instance into multi-AZ and trigger manual failover. Validate your RTO, benchmark failover and promotion duration, prepare for operational outages. Can cause minutes of downtime, schedule a maintenance window, ensure app has retry logic and can sustain DNS caching issues.
+
+```bash
+# Step 1: Convert an existing RDS DB instance into Multi-AZ for high availability
+aws rds modify-db-instance \
+    --db-instance-identifier prod-database \
+    --multi-az
+#  --apply-immediately means changes take effect right away. DO NOT USE 
+
+# Step 2: Trigger a manual failover to test RDS high availability
+aws rds reboot-db-instance \
+    --db-instance-identifier prod-database \
+    --force-failover
+# ^ Simulates a failure by rebooting the instance and forcing a failover to the standby (in the other AZ).
+#   Lets you measure how long the service takes to switch and recover (typically 60-120 seconds).
+
+# Step 3: Promote a read replica to standalone, measuring promotion time
+aws rds promote-read-replica \
+    --db-instance-identifier prod-database-dr-test
+
+# Useful for DR drills or scaling out read replicas into standalone databases.
+```
+- Maintain **runbooks** documenting RTO/RPO for each system, rollback procedures, and post-incident validation steps.
+
+
 
 ## Domain 2: Design High-Performing Architectures (28%)
 
 ### Storage Solutions
-- S3 storage classes and lifecycle policies
-- EBS volume types and performance characteristics
-- EFS performance modes and throughput modes
-- Storage Gateway types and hybrid patterns
-- FSx options and use cases
+
+**S3 Storage Classes and Lifecycle Policies**:
+- Roughly ordered from highest to lowest cost, and general resiliency/durability.
+- `S3 Standard`: High durability *(11 9’s)*, low latency, multiple AZs. Highest cost per GB. For frequently accessed data.
+- `S3 Intelligent-Tiering`: Automatically moves objects between frequent and infrequent access tiers based on usage patterns. No retrieval fees.
+- `S3 Standard-IA (Infrequent Access)`: Lower-cost, high durability, **charged per GB retrieved**. Use for backups or long-lived but rarely accessed data.
+- `S3 One Zone-IA`: Similar to Standard-IA but only stored in one AZ (lower durability). Cheaper, but not recommended for critical data.
+- `S3 Glacier Instant Retrieval`: Millisecond retrieval, lower cost, used for archived but occasionally needed data.
+- `S3 Glacier Flexible Retrieval`: Retrieval in minutes or hours, cheaper.
+- `S3 Glacier Deep Archive`: Lowest cost, retrieval in hours. Best for long-term compliance archives.
+- `S3 Reduced Redundancy Storage (RRS)`: Legacy, not recommended (lower durability).
+- **Example Lifecycle Policy**:
+```json
+{
+  "Rules": [
+    {
+      "ID": "TransitionToGlacier",
+      "Status": "Enabled",
+      "Prefix": "logs/",
+      "Transitions": [
+        { "Days": 30, "StorageClass": "STANDARD_IA" },
+        { "Days": 90, "StorageClass": "GLACIER" }
+      ],
+      "Expiration": { "Days": 365 }
+    }
+  ]
+}
+```
+
+**EBS Volume Types and Performance**:
+- EBS volumes are block storage devices for EC2 instances, each optimizes for different I/O patterns and costs.
+- **General Purpose (gp2/gp3)**:
+  - `gp2`: Baseline 3 IOPS/GB, up to 16,000 IOPS. Burst credits.
+  - `gp3`: 3000 IOPS and 125 MB/s throughput by default. Can provision up to 16,000 IOPS and 1,000 MB/s independently of volume size.
+- **Provisioned IOPS (io1/io2)**:
+  - Designed for *I/O-intensive workloads* like databases.
+  - Support up to 64,000 IOPS per volume (Nitro).
+  - **io2 Block Express**: Sub-millisecond latency, higher durability (99.999%).
+- **Throughput Optimized HDD (st1)**:
+  - Low-cost *magnetic* storage, optimized for sequential I/O (big data, streaming). Up to 500 MB/s throughput.
+- **Cold HDD (sc1)**:
+  - Lowest cost, for infrequently accessed data (cold backups). Throughput up to 250 MB/s.
+```bash
+# Create an EBS gp3 vol
+aws ec2 create-volume \
+  --availability-zone us-east-1a \
+  --size 100 \
+  --volume-type gp3 \
+  --iops 6000 \
+  --throughput 500
+```
+- RAID: Redundant Array of Independent Disks, combines multiple physical disks into a logical unit. RAID 0: Striping, RAID 1: Mirroring, RAID 5,6,10: Combiniation.
+```bash
+# Create RAID 0 with two gp3 volumes (8,000 IOPS each = 16,000 combined)
+mdadm --create /dev/md0 \
+    --level=0 \
+    --raid-devices=2 \
+    /dev/xvdf \
+    /dev/xvdg
+# Monitor RAID
+mdadm --detail /dev/md0
+# Create filesystem
+mkfs.ext4 /dev/md0
+# Mount
+mount /dev/md0 /data
+```
+
+**EFS Performance and Throughput Modes**: EFS is AWS managed NFS file system for EC2, supporting multiple AZs.
+- **Performance Modes**: Cannot be changed after creation.
+  - `General Purpose (Default)`: Lowest latency (1-3ms), web serving, general file serving.
+  - `Max IO`: Higher levels of aggregate throughput/operations per second (4-10ms), Higher latency but better parallelization. Big Data analytics, media processing.
+- **Throughput Modes**:
+  - `Bursting (Default)`: baseline (50kb/s per GB) to burst (100mb/s per file system) Charged per MB/s provisioned/credits based. Most workloads with variable I/O, lower cost.
+  - `Provisioned Throughput`: Independent of storage size, 1-1024 MB/s, charged per MB/s provisioned. Fixed cost, for predictable, sustained workloads.
+  
+- Example Throughput calculator: `Baseline(1TBx50Kb/s/GB) + Burst(100MB/s when credits available)`
+
+```yaml
+# General Purpose EFS (default) with Bursting Throughput
+GeneralPurposeEFS:
+  Type: AWS::EFS::FileSystem
+  Properties:
+    PerformanceMode: generalPurpose
+    ThroughputMode: bursting
+    Encrypted: true
+
+# Analytics EFS with Max I/O + Provisioned Throughput
+AnalyticsEFS:
+  Type: AWS::EFS::FileSystem
+  Properties:
+    PerformanceMode: maxIO
+    ThroughputMode: provisioned
+    ProvisionedThroughputInMibps: 500
+    Encrypted: true
+
+# Mount Targets (multi-AZ NFS access) Acts as an ENI with own IP in the subnet
+# EFS Access remains even if one AZ fails, also avoids across-AZ latency.
+MountTargetAZ1:
+  Type: AWS::EFS::MountTarget
+  Properties:
+    FileSystemId: !Ref GeneralPurposeEFS
+    SubnetId: !Ref PrivateSubnet1
+    SecurityGroups: [!Ref EFSSecurityGroup]
+
+MountTargetAZ2:
+  Type: AWS::EFS::MountTarget
+  Properties:
+    FileSystemId: !Ref GeneralPurposeEFS
+    SubnetId: !Ref PrivateSubnet2
+    SecurityGroups: [!Ref EFSSecurityGroup]
+# Add EFSSecurityGroup to controll access
+```
+- **Note**: You need to configure the automatic remount/persisting mount on boot using shell commands, `/etc/fstab`. Use EFS `AccessPoint` resources to managed permissions to the file system.
+
+**Storage Gateway**: Connects on-prem data centers to AWS cloud storage, enabling hybrid architectures.
+- **S3 File Gateway**: NFS/SMB protocol for S3, data cached locally, backed by S3. On-prem access to S3, cloud-native data sharing. Sub second latency for cached files. 100MB/s per gateway.
+- **iSCSI Gateway (Volume)**: Block storage via IsCSI protocol. Cached and Stored volumes, on-prem apps needing block storage/DR.
+  - **Cached Volume Architecture**: Primary data in AWS, cache on-prem. App writes to local cache, asych upload to S3 via EBS snapshot. RTO is minutes to restore.
+  - **Stored Volume Architecture**: Primary data on-prem, full backup in AWS. No throughput loss, RTO is hours from backup. High bandwidth required.
+- Tape Gateway: Virtual Tape Library (VTL) interface for LTFS. Data backed by S3 and Glacier, compliance backups, NetBackup or CommVault compatible. `Type: AWS::StorageGateway::Tape`
+
+- **Note**: You can throttle uploads via the gateway during business hours:
+```bash
+# Number in bits per second
+aws storagegateway update-bandwidth-rate-limit \
+    --gateway-arn arn:aws:storagegateway:us-east-1:123456789012:gateway/sgw-12345678 \
+    --average-upload-rate-limit-in-bits-per-sec 5242880 \
+    --average-download-rate-limit-in-bits-per-sec 10485760
+```
+- Exammple Hybrid Cloud Architecture visualization:
+```txt
+On-Premises Data Center
+├── Application Servers
+│   └── [NFS Mount]
+│       └── Storage Gateway (File Gateway)
+│           └── [Encrypted HTTPS]
+│               └── AWS S3 Bucket (Primary)
+│                   └── Lifecycle Policy
+│                       └── S3 Intelligent-Tiering
+│                           └── Glacier Deep Archive
+│
+└── Database Servers
+    └── [iSCSI Connection]
+        └── Storage Gateway (Cached Volume Gateway)
+            └── [Encrypted HTTPS]
+                └── AWS EBS Snapshots
+                    └── Cross-region copy to DR region
+```
+
+**FSx**: Managed file systems optimized for specific workloads that require high performance, feature-rich, scalable systems.
+- **FSx for Windows File Server**: NTFS technology, SMB protocol, Windows native, seamless Active Directory integration, DFS namespaces, data deduplication.
+  - RAID 6 redundancy. Single or Multi-AZ, legacy .NET workloads.
+  - Throughput Levels 8-256 MB/s. 
+- **FSx for Lustre**: OSS Lustre, POSIX and NFS protocols, High-performance compute, HPC, ML, extreme parallism, S3 integration, Linux compatible.
+  - sub-millisecond latency, 100-500MB/s per TB storage (auto-scaled based on capacity).
+- **FSx for NetApp ONTAP**: NFS, SMB and iSCSI protocols, Enterprise NetApp, FlexCache/FlexGroup and snapshot features. Migrate NetApp environments.
+- **FSx for OpenZFS**: NFS and SMB protocols, ZFS specific features. Data Compression, snapshot and replication locally or cross-region. Cost effective shared storage for PITR scenarios.
+
 
 ### Database Solutions
-- RDS vs DynamoDB use cases and scaling patterns
+
+**RDS vs DynamoDB**
+
 - Read replicas vs Multi-AZ for RDS
 - DynamoDB partition keys, GSI/LSI design
 - ElastiCache Redis vs Memcached
