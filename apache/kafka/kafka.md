@@ -53,6 +53,10 @@ Kafka stores messages in segments on disks:
       └── leader-epoch-checkpoint
 ```
 
+- **Each topic partition has its own folder**, containing files that handle message storage, indexing and recovery processes.
+    - `.log` is the **Segment File**, holding all the *actual Kafka messages*.
+    - `.index` is the **Offset file**, allowing for fast lookup of message positions by mapping logical offsets (message numbers) to actual byte positions in the Segment file.
+
 ### Replication Protocol
 
 1. **Leader Election**: One replica per partition is elected as a leader.
@@ -143,6 +147,9 @@ kubectl get pods -n kafka -w
 - You can define kafka specs when you create a Strimzi Kafka manifest: `apiVersion: kafka.strimzi.io/v1beta2`
 
 ### Metrics ConfigMap
+
+- `pattern` is a regex matched against the JMX metric names exposed by Kafka.
+- **Captured groups** within parenthesis (like `(.+)`) correspond to variables `$1`, `$2`, `$3`, etc.
 
 ```yaml
 apiVersion: v1
@@ -379,9 +386,9 @@ aws kafka create-cluster \
  --encryption-info file://encryption-info.json \
  --client-authentication file://client-authentication.json
 ```
-- broker-node-group-info.json: defines instance types, AZs, volume sizes.
-- encryption-info.json: configures encryption at rest and in transit.
-- client-authentication.json: sets AWS IAM or TLS authentication options.
+- `broker-node-group-info.json`: defines instance types, AZs, volume sizes.
+- `encryption-info.json`: configures encryption at rest and in transit.
+- `client-authentication.json`: sets AWS IAM or TLS authentication options.
 
 - Create a topic using Kafka CLI on MSK:
 
