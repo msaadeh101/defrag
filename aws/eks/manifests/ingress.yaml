@@ -1,33 +1,43 @@
 apiVersion: networking.k8s.io/v1
-kind: Ingress
+kind: Ingress   # Manages external HTTP/HTTPS access to services
 metadata:
-  name: myapp-ingress
-  namespace: myapp
+  name: web-app-ingress
   annotations:
-    kubernetes.io/ingress.class: alb
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:YOUR_REGION:YOUR_ACCOUNT_ID:certificate/YOUR_CERT_ID
-    alb.ingress.kubernetes.io/ssl-redirect: '443'
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
-    alb.ingress.kubernetes.io/healthcheck-path: /actuator/health
-    alb.ingress.kubernetes.io/healthcheck-interval-seconds: '30'
-    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: '5'
-    alb.ingress.kubernetes.io/healthy-threshold-count: '2'
-    alb.ingress.kubernetes.io/unhealthy-threshold-count: '3'
-    alb.ingress.kubernetes.io/success-codes: '200'
+  # AWS LB Controller Annotations ####
+  # 1. Controller Selection: Tell K8 to use AWS LB controller
+  kubernetes.io/ingress.class: alb
+  # 2. LB Type: Specifies that an ALB should be created (nlb for network load balancer)
+  alb.ingress.kubernetes.io/scheme: internet-facing
+  # 3. LB Protocol: Listin on port 443 and port 80
+  alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+  # 4. Certificates: Reference existing ACM certificate ARN for HTTPS
+  # CRITICAL: REPLACE with your actual certificate ARN, only affects pods routed through this ingress
+  alb.ingress.kubernetes.io/certificate-arn: arn:aws:us-east-1:123456789012:certificate/uuid
+  # Use a separate cert for each application or a wildcard for *.example.com
+  # One ACM certificate must cover all hostnames if we have multiple paths/hosts inside a single ingress
+  # 5. Redirect HTTP to HTTPS: enforces secure traffic
+  alb.ingress.kubernetes.io/actions.ssl-redirect: '{"Type": "redirect", "RedirectConfig": { "Protocol": "HTTPS", "Port": "443", "StatusCode": "HTTP_301"}}'
+  # 6. Target Group Configuration (Health Checks, etc)
+  alb.ingress.kubernetes.io/healthcheck-path: /healthz
+  alb.ingress.kubernetes.io/success-codes: '200'
 spec:
   rules:
-  - host: myapp.company.com
+  - host: www.myapp.com # Domain for this ingress rule
     http:
       paths:
+      # Rule 1: Redirect HTTP to HTTPS (uses action from annotations)
       - path: /
         pathType: Prefix
         backend:
           service:
-            name: myapp-service
+            name: ssl-redirect # Reference the custom action defined in annotation
             port:
-              number: 80
-# kubernetes.io/ingress.class: alb this automatically provisions an ALB
-# alb.ingress.kubernetes.io/scheme: internet-facing tells EKS alb is accessible from internet
-# certificate-arn points ALB to SSL cert in AWS Certificate Manager (ACM)
+              name: use-annotation
+      # Rule 2: Define HTTPS routing to app service
+      - path: /
+        pathType: Prefix # Matches all paths starting with /
+        backend:
+          service:
+            name: web-app-service 
+            port:
+              number: 80 # Target Service Port (from service definition)

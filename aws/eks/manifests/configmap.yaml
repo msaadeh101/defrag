@@ -1,17 +1,15 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: myapp-config
-  namespace: myapp
+  name: app-config
+  namespace: default
 data:
+  # Key-Value Pair 1: As env variable CONFIG_LEVEL
+  config.level: "info"
+  # Key-Value Pair 2: As env variable DB_TIMEOUT_SECONDS
+  db.timeout.seconds: "30"
+  # Config file content: CAN be mounted inside the container
   application.properties: |
-    server.port=8000
-    management.endpoints.web.exposure.include=health,info,metrics
-    management.endpoint.health.show-details=always
-    logging.level.com.company.myapp=INFO
-  JVM_OPTS: "-Xmx512m -Xms256m -XX:+UseG1GC -XX:MaxRAMPercentage=75"
-# Keys are application.properties and JVM_OPTS
-# Values are strings (Single or multiline)
-# Everything after | is a literal block
-# perfect for files like application.properties (mounted at /config/application.properties)
-# -Xmx512m (heap size), -Xms256m (initial heap), -XX:+UseG1GC (enable 1 gc), -XX:MaxRAMPercentage=75 (use 75% container mem)
+    server.port=8080
+    metrics.enabled=true
+# Sensitive data should be used in a Secret, NOT configmap

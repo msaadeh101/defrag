@@ -1,0 +1,25 @@
+# cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob # The resource type: executes a Job on a defined schedule.
+metadata:
+  name: nightly-backup
+spec:
+  schedule: "0 0 * * *" # CRON expression: Runs every day at 00:00 UTC.
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup-container
+            image: alpine/helm:3.7.1-bash # A basic image with necessary tools.
+            command: ["/bin/bash", "-c"]
+            args:
+            - |
+              echo "Starting nightly database backup..."
+              # In a real scenario, this would execute a script to backup the database to S3.
+              /usr/local/bin/backup-script.sh --target s3://my-backup-bucket
+              echo "Backup complete."
+            restartPolicy: OnFailure # If the backup fails, retry until completion.
+          restartPolicy: OnFailure # Pod restart policy.
+  successfulJobsHistoryLimit: 3 # Keeps history of the last 3 successful Job runs.
+  failedJobsHistoryLimit: 1 # Keeps history of the last 1 failed Job run.

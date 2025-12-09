@@ -1,25 +1,27 @@
+# 4. hpa.yaml
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: myapp-hpa
-  namespace: myapp
+  name: web-app-hpa
+  namespace: default
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: myapp
-  minReplicas: 3
-  maxReplicas: 10
+    name: web-app-deployment # Targets the Deployment we want to scale.
+  minReplicas: 3 # Never scale below 3 Pods (ensures HA baseline).
+  maxReplicas: 10 # Never scale above 10 Pods (limits cost/resource consumption).
   metrics:
   - type: Resource
     resource:
       name: cpu
       target:
         type: Utilization
-        averageUtilization: 70
+        averageUtilization: 60 # Scale up when the average CPU usage across all Pods exceeds 60% of the requested CPU.
   - type: Resource
     resource:
       name: memory
       target:
         type: Utilization
-        averageUtilization: 80
+        averageUtilization: 80 # Scale up when average memory usage exceeds 80%.
+  # Optional: You can add custom metrics here from Prometheus/CloudWatch for more complex scaling logic.

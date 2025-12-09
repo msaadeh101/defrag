@@ -1,89 +1,77 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: myapp
-  namespace: myapp
+  name: web-app-deployment
   labels:
-    app: myapp
+    app: web-app
 spec:
   replicas: 3
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 1
-      maxSurge: 1
   selector:
     matchLabels:
-      app: myapp
+      app: web-app-pod # Critical: Links deployment to pods it manages
   template:
     metadata:
       labels:
-        app: myapp
+        app: web-app-pod # Labels applied to pods created by this deployment
     spec:
-      serviceAccountName: myapp-serviceaccount
+      # CRITICAL ADDITION: Defines the ServiceAccount used by Pods for IRSA/CSI driver access.
+      serviceAccountName: api-data-access 
+      
       containers:
-      - name: myapp
-        image: YOUR_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com/myapp:latest
+      - name: web-app-container
+        image: accountID.dkr.ecr.us-east-1.amazonaws.com/web-app:v1.2
         ports:
-        - containerPort: 8080
-          name: http
-        env:
-        - name: SPRING_PROFILES_ACTIVE
-          value: "production"
-        - name: JVM_OPTS
-          valueFrom:
-            configMapKeyRef:
-              name: myapp-config
-              key: JVM_OPTS
-        - name: DATABASE_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: myapp-secrets
-              key: database-password
-        - name: API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: myapp-secrets
-              key: api-key
+        - containerPort: 8080 # Port the app inside the container is listening on
+        
+        # CRITICAL ADDITION: Mounts the volume for secrets retrieval.
         volumeMounts:
-        - name: config-volume
-          mountPath: /app/config
+        - name: secrets-volume # References the volume defined below.
+          mountPath: "/mnt/secrets" # The directory inside the container where files will appear.
+          readOnly: true
+          
+        # Optional: Access the secrets via environment variables by reading the mounted files.
+        # This requires the CSI driver to be configured to auto-create a Kubernetes Secret 
+        # (or the application reads the files directly from /mnt/secrets).
+        env: 
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: app-db-secret # The name of the (auto-generated) Kubernetes Secret.
+              key: DB_HOST # The key (filename) defined in SecretProviderClass.
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: app-db-secret # The name of the (auto-generated) Kubernetes Secret.
+              key: DB_PASSWORD # The key (filename) defined in SecretProviderClass.
+
         resources:
-          requests:
-            memory: "256Mi"
-            cpu: "250m"
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            cpu: "500m"     # Upper limit: Pod cannot use more than 0.5 CPU cores.
+            memory: "512Mi" # Upper limit: Pod cannot use more than 512 MiB of memory.
+          requests:
+            cpu: "250m"     # Min request: Scheduler must reserve 0.25 CPU cores for this Pod.
+            memory: "256Mi" # Min request: Scheduler must reserve 256 MiB of memory for this Pod.
+            
         livenessProbe:
           httpGet:
-            path: /actuator/health
+            path: /healthz
             port: 8080
-          initialDelaySeconds: 60
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 3
+          initialDelaySeconds: 15 # Wait 15s before starting liveness check
+          periodSeconds: 20       # Check every 20s. If this fails, the container is restarted.
+          
         readinessProbe:
           httpGet:
-            path: /actuator/health
+            path: /ready
             port: 8080
-          initialDelaySeconds: 30
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 3
-        startupProbe:
-          httpGet:
-            path: /actuator/health
-            port: 8080
-          initialDelaySeconds: 10
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 30
+          periodSeconds: 5        # Check every 5s, if fails, pod is taken out out of service
+          
+      # CRITICAL ADDITION: Defines the volume source for the Secrets Store CSI driver.
       volumes:
-      - name: config-volume
-        configMap:
-          name: myapp-config
-      imagePullSecrets:
-      - name: ecr-registry-secret
-# myapp-config CM holds non-sensitive data for JVM_OPTS env var
-# config-volume also mounts entire CM myapp-config on /app/config allowing to read config files directly
+      - name: secrets-volume
+        csi:
+          driver: secrets-store.csi.k8s.io # Specifies the CSI driver for secret injection.
+          readOnly: true
+          volumeAttributes:
+            # CRITICAL: References the separate SecretProviderClass manifest.
+            # This is the link that tells the CSI driver *which* AWS secret to fetch.
+            secretProviderClass: rds-secret-provider

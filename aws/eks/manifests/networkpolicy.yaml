@@ -1,29 +1,48 @@
+# 3. networkpolicy.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: myapp-netpol
-  namespace: myapp
+  name: api-isolation-policy
+  namespace: default
 spec:
   podSelector:
     matchLabels:
-      app: myapp
+      app: web-app-pod # Targets the Pods of the Deployment (from your first manifest set).
   policyTypes:
-  - Ingress
-  - Egress
+    - Ingress # Applies rules for inbound traffic.
+    - Egress  # Applies rules for outbound traffic.
+
+  # -----------------------------------------------------------
+  # INGRESS RULES (Inbound Traffic)
+  # -----------------------------------------------------------
   ingress:
   - from:
-    - namespaceSelector:
+    - namespaceSelector: {} # Selects all namespaces.
+      podSelector:
+        # Allows ingress from the AWS Load Balancer Controller Pods (in the kube-system namespace).
         matchLabels:
-          name: kube-system
-    - namespaceSelector:
-        matchLabels:
-          name: aws-load-balancer-webhook
+          app.kubernetes.io/component: controller
+          app.kubernetes.io/name: aws-load-balancer-controller
     ports:
     - protocol: TCP
-      port: 8080
+      port: 8080 # Allows traffic to the application port.
+
+  # -----------------------------------------------------------
+  # EGRESS RULES (Outbound Traffic)
+  # -----------------------------------------------------------
   egress:
-  - {} # Allow all egress traffic
-# Network policy controls how pods can communicate with each other
-# Ingress is the most restrictive part of the policy
-# from: allows traffic from any pod in kube-system (CoreDNS, etc)
-# aws-load-balancer-webhook is the external traffic allowance
+  - to:
+    # Rule 1: Allow DNS resolution (required for service discovery and external communication).
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system # Target the kube-system namespace.
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns # Targets the DNS Pods (e.g., CoreDNS).
+    ports:
+    - protocol: UDP
+      port: 53 # DNS port.
+  - to:
+    # Rule 2: Allow outbound traffic to the database (replace with your DB selector if internal).
+    - ipBlock:
+        cidr: 10.0.0.0/8 # Example CIDR for internal VPC communication (e.g., to an RDS instance).
