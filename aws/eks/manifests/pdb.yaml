@@ -1,12 +1,12 @@
+# 5. pdb.yaml
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: myapp-pdb
-  namespace: myapp
+  name: web-app-pdb
+  namespace: default
 spec:
-  minAvailable: 2
+  minAvailable: 2 # CRITICAL: Guarantees that at least 2 replicas must be running at all times.
   selector:
     matchLabels:
-      app: myapp
-# PDB works to combat voluntary disruptions like human/automation initiated disruptions
-# PDB will intervene with kubectl drain node, or if cluster autoscaler drains node
+      app: web-app-pod # Targets the Pods of the Deployment.
+  # Alternatively, you could use maxUnavailable: 1 to ensure only one Pod is unavailable at a time.

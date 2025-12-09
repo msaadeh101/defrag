@@ -1,0 +1,14 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-gp3-encrypted
+provisioner: ebs.csi.aws.com # CRITICAL: Must use the AWS EBS CSI driver for provisioning.
+parameters:
+  type: gp3 # Uses the latest General Purpose SSD (better performance, lower cost than gp2).
+  fsType: ext4 # Filesystem type
+  encrypted: "true" # Best practice: all volumes must be encrypted.
+  # Optional: Specify IOPS and throughput for predictable performance.
+  iopsPerGB: "3" 
+  throughput: "125" # MB/s
+reclaimPolicy: Retain # CRITICAL: Keep the EBS volume after the PVC is deleted (for safety/data recovery).
+volumeBindingMode: WaitForFirstConsumer # Delays volume creation until a Pod tries to use it (ensures volume is created in the correct Availability Zone).

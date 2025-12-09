@@ -1,0 +1,12 @@
+# 7. persistentvolumeclaim.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: app-data-pvc
+spec:
+  storageClassName: ebs-gp3-encrypted # CRITICAL: References the StorageClass defined above.
+  accessModes:
+    - ReadWriteOnce # The volume can be mounted as read-write by a single node (standard for EBS).
+  resources:
+    requests:
+      storage: 50Gi # Requests a 50 GiB volume.
