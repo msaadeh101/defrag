@@ -1,0 +1,11 @@
+# Default values for the API service
+replicaCount: 1
+
+image:
+  repository: 123456789.dkr.ecr.us-west-2.amazonaws.com/api-service
+  tag: v1.0.0 # This is the value that would be updated by an automated process
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80

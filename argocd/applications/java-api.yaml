@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: java-api
+  namespace: argocd
+spec:
+  project: microservices
+  source:
+    repoURL: https://gitlab.example.com/team/microservices-gitops
+    path: helm/api-service
+    targetRevision: main
+    helm:
+      valueFiles:
+        - values-production.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: java-api
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
