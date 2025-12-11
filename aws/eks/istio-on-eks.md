@@ -946,12 +946,221 @@ spec:
 
 ## Observability Integrations
 
-
 ### Prometheus Integration
 
+```bash
+# Install Prometheus with Istio
+kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/prometheus.yaml
+
+# Verify installation
+kubectl get pods -n istio-system -l app=prometheus
+```
+
+- This `ServiceMonitor` is a Kubernetes resource that tells Prometheus how to find and scrape metrics from a set of services (Istio components here).
+
+```yaml
+# prometheus-servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: istio-component-monitor
+  namespace: istio-system
+spec: # The desired state of the ServiceMonitor
+  selector:
+    matchExpressions: # Must satisfy all: target Services that have the label 'istio: pilot'
+    - key: istio
+      operator: In
+      values:
+      - pilot
+  endpoints:
+  - port: http-monitoring # Name of port (defined in Service object) that exposes the metrics endpoint
+    interval: 15s
+```
 
 ### AWS CloudWatch Integration
 
+- **Amazon CloudWatch Agent** is a software package to collect system level metrics, application logs and traces (ConfigMap, ServiceAccount, Dameonset).
+
+```yaml
+# cloudwatch-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-info
+  namespace: amazon-cloudwatch
+data:
+  cluster.name: istio-cluster
+  logs.region: us-west-2
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudwatch-agent
+  namespace: amazon-cloudwatch
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/CloudWatchAgentRole
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cloudwatch-agent
+  namespace: amazon-cloudwatch
+spec:
+  selector:
+    matchLabels:
+      name: cloudwatch-agent
+  template:
+    metadata:
+      labels:
+        name: cloudwatch-agent
+    spec:
+      serviceAccountName: cloudwatch-agent
+      containers:
+      - name: cloudwatch-agent
+        image: amazon/cloudwatch-agent:latest
+        env:
+        - name: CLUSTER_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: cluster-info # Name of the configMap
+              key: cluster.name # Key within the configmap whose value is taken
+```
+
+### Jaeger Distributed Tracing
+
+```bash
+# Install Jaeger
+kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/jaeger.yaml
+
+# Enable tracing in Istio
+kubectl apply -f - <<EOF
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: istio-tracing
+  namespace: istio-system
+spec:
+  meshConfig:
+    enableTracing: true
+    defaultConfig:
+      tracing:
+        sampling: 10.0
+        zipkin:
+          address: jaeger-collector.istio-system.svc:9411
+EOF
+```
+
+### Grafana Integration
+
+```bash
+# Install Grafana
+kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/grafana.yaml
+
+# Access Grafana
+kubectl port-forward svc/grafana -n istio-system 3000:3000
+```
+
+- Grafana Dashboard ConfigMap object
+
+```yaml
+# grafana-dashboard-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: custom-dashboard
+  namespace: istio-system
+  labels:
+    grafana_dashboard: "1"
+data:
+  custom-dashboard.json: |
+    {
+      "dashboard": {
+        "title": "Custom Istio Metrics",
+        "panels": [...]
+      }
+    }
+```
+
+### Kiali Service Mesh Observability
+
+**Kiali** is a console for Istio and can be installed as an Istio add-on. The recommended way to install is still via Helm.
+
+```bash
+# Install Kiali
+kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/kiali.yaml
+
+# Access Kiali
+istioctl dashboard kiali
+```
+
+Kiali Custom Resource:
+- `auth:` Sets the authentication strategy. `anonymous` means anyone can access the UI without logging in (simplest, but least secure). `token` or `openid` are more secure options.
+- Kiali relies on **Prometheus** for querying metrics, and can link directly to **Grafana** dashboards. For tracing, it integrates with **Jaeger** or **Zipkin** tracing backends.
+
+
+```yaml
+# kiali-cr.yaml
+apiVersion: kiali.io/v1alpha1
+kind: Kiali
+metadata:
+  name: kiali
+  namespace: istio-system
+spec:
+  auth: # Sets the Authentication Strategy
+    strategy: anonymous
+  deployment:
+    accessible_namespaces: # Defines which namespaces Kiali is allowed to view
+    - '**' # Wildcard meaning all services in the entire cluster
+    image_version: v1.73
+  external_services:
+    prometheus:
+      url: http://prometheus:9090
+    grafana:
+      url: http://grafana:3000
+    tracing:
+      url: http://jaeger-query:16686
+```
+
+### AWS X-Ray Integration
+
+```yaml
+# xray-daemon.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: xray-daemon
+  namespace: istio-system
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/XRayDaemonRole
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: xray-daemon
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      app: xray-daemon
+  template:
+    metadata:
+      labels:
+        app: xray-daemon
+    spec:
+      serviceAccountName: xray-daemon
+      containers:
+      - name: xray-daemon
+        image: amazon/aws-xray-daemon:latest
+        ports:
+        - containerPort: 2000
+          protocol: UDP
+        resources:
+          limits:
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+```
 
 ## Performance Tuning (Large Clusters)
 
