@@ -476,20 +476,235 @@ aws cloudwatch list-dashboards
 aws cloudwatch get-dashboard --dashboard-name MyApplicationDashboard
 ```
 
+**Widget Types**:
+- **Line Graphs**: Trending data over time.
+- **Stacked Area**: Cumulative values.
+- **Number**: Single value display.
+- **Log Widgets**: Recent log events.
+- **Alarm Status**: Current alarm states.
 
+```text
+┌─────────────────────────────────────────────────┐
+│ System Health Overview                          │
+├─────────────────────────────────────────────────┤
+│ [Active Alarms]  [Request Rate]  [Error Rate]   │
+├─────────────────────────────────────────────────┤
+│                                                 │
+│  Lambda Performance     │   EKS Performance     │
+│  ┌────────────────┐     │   ┌────────────────┐  │
+│  │ Invocations    │     │   │ CPU Usage      │  │
+│  │ Errors         │     │   │ Memory Usage   │  │
+│  │ Duration       │     │   │ Pod Count      │  │
+│  └────────────────┘     │   └────────────────┘  │
+├─────────────────────────────────────────────────┤
+│  Database Metrics       │   Cache Performance   │
+│  ┌────────────────┐     │   ┌────────────────┐  │
+│  │ Connections    │     │   │ Hit Rate       │  │
+│  │ Query Time     │     │   │ Evictions      │  │
+│  └────────────────┘     │   └────────────────┘  │
+└─────────────────────────────────────────────────┘
+
+```
 
 ## CloudWatch Insights
 
-## Java Integration
+### Basic Query Syntax
 
-## EKS Integration
+```sql
+fields @timestamp, @message
+| filter @message like /ERROR/
+| sort @timestamp desc
+| limit 20
+```
+
+### Common Queries
+
+```sql
+-- Find errors with context:
+fields @timestamp, @message, @logStream
+| filter level = "ERROR"
+| sort @timestamp desc
+| limit 50
+```
+
+```sql
+-- Calculate percentiles for latency:
+fields @timestamp, duration
+| filter ispresent(duration)
+| stats avg(duration), 
+        pct(duration, 50), 
+        pct(duration, 95), 
+        pct(duration, 99) by bin(5m)
+```
+
+```sql
+-- Count errors by type:
+fields @timestamp, errorType
+| filter level = "ERROR"
+| stats count() by errorType
+| sort count desc
+```
+
+```sql
+-- Track API endpoint usage:
+fields @timestamp, endpoint, method
+| filter method in ["GET", "POST", "PUT", "DELETE"]
+| stats count() by endpoint, method
+| sort count desc
+```
+
+```sql
+-- Find Slow Queries:
+fields @timestamp, query, duration
+| filter duration > 1000
+| sort duration desc
+| limit 20
+```
+
+```sql
+-- Parse JSON logs:
+fields @timestamp, @message
+| parse @message '{"user":"*","action":"*","duration":*}' as user, action, duration
+| stats avg(duration) by action
+```
+
+```sql
+-- Complex Aggregations:
+fields @timestamp, statusCode, responseTime
+| filter statusCode >= 400
+| stats count() as ErrorCount, 
+        avg(responseTime) as AvgResponseTime,
+        max(responseTime) as MaxResponseTime 
+  by statusCode, bin(5m) as Time
+| sort Time desc
+```
+
+### Container Insights
+
+- Enable Container Insights for EKS:
+
+```bash
+# Using Fargate
+eksctl utils update-cluster-logging \
+  --enable-types all \
+  --region us-east-1 \
+  --cluster my-cluster \
+  --approve
+
+# Deploy CloudWatch agent
+kubectl apply -f https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/quickstart/cwagent-fluentd-quickstart.yaml
+```
+
+```sql
+-- Pod CPU by namespace
+STATS avg(pod_cpu_utilization) by Namespace, PodName
+
+-- Memory usage
+STATS avg(pod_memory_utilization) by Namespace 
+| FILTER Namespace = "production"
+
+-- Container restart count
+STATS max(number_of_container_restarts) by PodName
+| SORT number_of_container_restarts DESC
+
+```
 
 ## Lambda Integration
 
-## Best Practices
+- Enable Lambda Insights:
 
-### Advanced Queries
+```bash
+# Add layer to Lambda function
+aws lambda update-function-configuration \
+  --function-name my-function \
+  --layers arn:aws:lambda:us-east-1:580247275435:layer:LambdaInsightsExtension:14
+```
 
-### Cost Optimization
+### Lambda Insights Queries
 
-### Troubleshooting
+```sql
+-- Cold start analysis
+filter @type = "platform.initReport"
+| stats count() as coldStarts, 
+        avg(@initDuration) as avgInitDuration,
+        max(@initDuration) as maxInitDuration
+
+-- Memory usage patterns
+filter @type = "platform.report"
+| stats avg(@maxMemoryUsed / @memorySize * 100) as avgMemoryUtilization,
+        max(@maxMemoryUsed) as maxMemoryUsed
+  by bin(5m)
+
+-- Error analysis
+filter @type = "platform.report" and @message like /ERROR/
+| stats count() as errors by @logStream
+| sort errors desc
+```
+
+## Java Integration
+
+### Enable X-Ray Tracing
+
+```java
+// Add X-Ray SDK dependencies
+import com.amazonaws.xray.AWSXRay;
+import com.amazonaws.xray.entities.Subsegment;
+
+public class TracedService {
+    
+    public void processRequest(String requestId) {
+        Subsegment subsegment = AWSXRay.beginSubsegment("ProcessRequest");
+        try {
+            subsegment.putAnnotation("RequestId", requestId);
+            subsegment.putMetadata("Environment", "Production");
+            
+            // Your business logic
+            performDatabaseQuery();
+            callExternalAPI();
+            
+        } catch (Exception e) {
+            subsegment.addException(e);
+            throw e;
+        } finally {
+            AWSXRay.endSubsegment();
+        }
+    }
+    
+    private void performDatabaseQuery() {
+        Subsegment dbSegment = AWSXRay.beginSubsegment("DatabaseQuery");
+        try {
+            dbSegment.putAnnotation("QueryType", "SELECT");
+            // Database operations
+        } finally {
+            AWSXRay.endSubsegment();
+        }
+    }
+}
+```
+
+### Maven Dependencies
+
+```xml
+<dependencies>
+    <!-- CloudWatch SDK -->
+    <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>cloudwatch</artifactId>
+        <version>2.20.0</version>
+    </dependency>
+    
+    <!-- CloudWatch Logs SDK -->
+    <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>cloudwatchlogs</artifactId>
+        <version>2.20.0</version>
+    </dependency>
+    
+    <!-- X-Ray SDK -->
+    <dependency>
+        <groupId>com.amazonaws</groupId>
+        <artifactId>aws-xray-recorder-sdk-core</artifactId>
+        <version>2.13.0</version>
+    </dependency>
+</dependencies>
+```
