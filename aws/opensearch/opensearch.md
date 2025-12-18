@@ -36,17 +36,17 @@
 
 ### Core Concepts
 
-- Domain (Cluster): The OpenSearch environment you provision, consisting of one or more nodes and configuration (instance types, storage, etc).
+- **Domain (Cluster)**: The OpenSearch environment you provision, consisting of one or more nodes and configuration (instance types, storage, etc).
 
-- Nodes: EC2 instances that make up the domain.
-    - Data Nodes: Store the data and process search/indexing requests.
-    - Dedicated Cluster Manager (Master) Nodes: Handle cluster-management tasks (tracking cluster state, index creation/deletion) to ensure stability.
+- **Nodes**: EC2 instances that make up the domain.
+    - **Data Nodes**: Store the data and process search/indexing requests.
+    - **Dedicated Cluster Manager (Master) Nodes**: Handle cluster-management tasks (tracking cluster state, index creation/deletion) to ensure stability.
 
-- Index: A collection of documents that share similar characteristics (like a table in a relational DB).
+- **Index**: A collection of documents that share similar characteristics (like a table in a relational DB).
 
-- Shard: A portion of an index. Automatically distributes indices acorss multiple shards, which are spread across data nodes to enable horizontal scaling and parallel processing.
-    - Primary Shard: Original unit of data.
-    - Replica Shard: Copy of primary shard, used for redundancy and to increase throughput.
+- **Shard**: A portion of an index. Automatically distributes indices acorss multiple shards, which are spread across data nodes to enable horizontal scaling and parallel processing.
+    - **Primary Shard:** Original unit of data.
+    - **Replica Shard**: Copy of primary shard, used for redundancy and to increase throughput.
 
 ### Features
 
