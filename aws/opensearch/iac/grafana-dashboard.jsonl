@@ -1,0 +1,27 @@
+// Values for ConfigMap - Values inside expr/targets are PromQL queries (promehtues time-series store)
+// opensearch_jvm_memory...{area="heap"} - metrics exposing JVM heap bytes that exporter scapes and labels with heap
+// stat - single value for status of nodes
+// gauge - can fluctuate, Heap Usage %
+{
+    "dashboard": {
+        "title": "AWS OpenSearch Production",
+        "panels": [
+          {
+            "title": "Cluster Health",
+            "type": "stat",
+            "targets": [{
+              "expr": "opensearch_cluster_health_status{color=\"green\"}",
+              "legendFormat": "Green Nodes"
+            }]
+          },
+          {
+            "title": "JVM Heap Usage",
+            "type": "gauge",
+            "targets": [{
+              "expr": "opensearch_jvm_memory_used_bytes{area=\"heap\"} / opensearch_jvm_memory_max_bytes{area=\"heap\"} * 100",
+              "legendFormat": "Heap Usage %"
+            }]
+          }
+        ]
+    }
+}
