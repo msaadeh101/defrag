@@ -1,0 +1,39 @@
+name: CI Microservice
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-test-and-update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GH_PAT }}  # PAT with write permissions
+      
+      # Build and test
+      - name: Build and Test
+        run: mvn -B verify
+      
+      - name: Build and Push to ECR
+        run: |
+          docker build -t $ECR_REGISTRY/user-service:${{ github.sha }} .
+          docker push $ECR_REGISTRY/user-service:${{ github.sha }}
+      
+      # CRITICAL for ArgoCD automation: Update image tag in Kustomize manifest
+      - name: Update Kustomize Image Tag
+        run: |
+          # Use Kustomize edit to update image tag
+          cd services/user-service/k8s/overlays/production
+          kustomize edit set image \
+            user-service=$ECR_REGISTRY/user-service:${{ github.sha }}
+      
+      # Commit the updated manifest
+      - name: Commit Manifest Update
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add services/user-service/k8s/overlays/production/kustomization.yaml
+          git commit -m "chore(user-service): update image to ${{ github.sha }}"
+          git push origin main

@@ -61,6 +61,15 @@
 - **Automated Promotion**: CI Passes -> ArgoCD and PR triggered Deployments
 - **Secret Management**: External Secrets Operator and Github Environments
 
+### Deployment Flow
+
+1. Developer pushes code → Triggers CI
+2. CI builds, tests, pushes image to registry
+3. CI updates image tag in kustomization.yaml and commits
+4. ArgoCD detects Git change (polling or webhook)
+5. ArgoCD syncs new image to cluster
+6. Health checks validate deployment
+
 ## Considerations
 
 - **EKS Versions**: Minor K8s versions are under standard support for EKS for 14 months after release. Extended support for 12 months, at additional cost. Current standard support versions (Jan 2026): 1.32-1.34.
@@ -69,7 +78,9 @@
 
 - **Istio Versions**: Istio 1.28 is the latest as of Jan 2026, and supports K8 versions 1.30-1.34. 1.27 is supported until Apr 2026 and goes up to k8 1.33.
 
-- **Certificate Managemet**: `cert-manager` consumes IRSA/Pod Identity and creates the K8 secret (in `istio-ingress` ns) for Istio Gateway. Issuer and Certificate are defined separately. `dns01` is chosen as the challenge type because it allows for wildcard certificates, and doesn't require a Load Balancer to be reachable for validation.
+- **Certificate Managemet**: `cert-manager` consumes IRSA/Pod Identity and creates the K8 secret (in `istio-ingress` ns) for Istio Gateway. Issuer and Certificate are defined separately. `dns01` is chosen as the challenge type because it allows for wildcard certificates, and doesn't require a Load Balancer to be reachable for validation. Ensure cert-manager rotates certs 7 days before expiry.
+
+- **Lambda Cold Starts/Timeouts**: Use Provisioned concurrency for critical functions to prevent SQS latency spikes. Consider **EventBridge Pipes** (S3->SQS as an alternative). SQS Visibility timeout must match Lambda timeout (30 seconds, 3 failures).
 
 
 ## Traffic Flow
