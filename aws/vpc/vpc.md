@@ -156,8 +156,96 @@ Destination       Target
 
 ## VPC Endpoints (PrivateLink)
 
+**VPC Endpoints** enable private connections between your VPC and AWS services without requiring an Internet Gateway, NAT device, VPN connection, or AWS Direct Connect.
+- Traffic between your VPC and the service does not leave the Amazon network.
+
+### Interface Endpoints
+
+- Powered by AWS PrivateLink, uses **DNS** to route traffic.
+- Elastic Network Interface (ENI) with private IP.
+- Supports most AWS services and customer/third-party services
+- Charged per hour + data processed ($0.01/hour/AZ + $0.01/GB)
+- Supports Security Groups
+
+| DNS Type	|Description	|DNS Name|
+|-----------|------------|--------|
+|**Regional DNS** |	Regional VPC endpoint DNS name (routes within the region)|	`vpce-0123456789abcdef-abc123de.ec2.us-east-1.vpce.amazonaws.com`|	
+|	**Zonal DNS** | **(AZ: us-east-1a)**	AZ-specific VPC endpoint DNS name	|`vpce-0123456789abcdef-abc123de-us-east-1a.ec2.us-east-1.vpce.amazonaws.com`|
+|**Service DNS**	|Standard AWS service DNS **(overridden by Private DNS when enabled)**	|`ec2.us-east-1.amazonaws.com`|
+
+**Private DNS**:
+- When enabled, AWS service DNS names resolve to endpoint IPs.
+- Requires `enableDnsHostnames` and `enableDnsSupport` on VPC.
+- Transparently routes traffic through endpoint.
+
+### Gateway Endpoints
+
+- Only supports **S3** and **DynamoDB**.
+- **Route table-based routing**, No ENI, no IP address.
+- FREE.
+Regional resource (spans all AZs)
+- **Cannot be extended out of VPC**
+
+**Example Route Table Entry**:
+
+```txt
+Destination              Target
+pl-63a5400a (S3)        vpce-xxxxx
+pl-78a54011 (DynamoDB)  vpce-yyyyy
+# Prefix List (PL) Manafed and updated by AWS for service IP ranges.
+```
+
+### Gateway Load Balancer Endpoints
+
+- For third-party virtual appliances
+- Transparent network gateway
+- Traffic inspection, IDS/IPS, firewalls
+- Uses **GENEVE** protocol.
+
+### Endpoint Policies
+
+You can manage VPC Interface or Gateway Endpoints with policies attached to them.
+- **Endpoint policies control service API actions**, not IAM actions (IAM policies do not allow `Principal`).
+- Below restricts access to identities in a specific organization.
+
+```json
+{
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::123456789012:role/AppRole"
+      },
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:PrincipalOrgID": "o-xxxxxxxxxx"
+        }
+      }
+    }
+  ]
+}
+```
+
 ## Network Design
 
 ## Security and Access Control
 
 ## Troubleshooting and Examples
+
+### Check Private DNS
+
+```bash
+# Check if private DNS is working
+nslookup s3.us-east-1.amazonaws.com
+
+# Should return private IPs from your VPC CIDR, not public AWS IPs
+# Example output:
+# Name:    s3.us-east-1.amazonaws.com
+# Address: 10.0.1.45
+# Address: 10.0.2.67
+```
