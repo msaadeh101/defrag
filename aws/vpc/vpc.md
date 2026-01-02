@@ -233,11 +233,85 @@ You can manage VPC Interface or Gateway Endpoints with policies attached to them
 
 ## Network Design
 
+### Single VPC Multi-Tier
+
+- Simple architecture/management, low-latency between tiers.
+- Limited network segregation.
+
+```txt
+VPC: 10.0.0.0/16
+├── Public Subnets (NAT, ALB)
+├── Private Subnets (Compute)
+└── Isolated Subnets (Databases)
+
+Internet → IGW → ALB → EC2 → RDS
+                ↓
+              NAT → Internet (outbound)
+```
+
+### Multi-VPC with Peering
+
+- Multiple environments (Dev, stage, prod) with different compute/compliance requirements.
+- Cross-region supported.
+- Shared services environment for CICD, observability, etc.
+- **VPC Peering is Non-transitive**: A-B and B-C does not equal A-C.
+
+```txt
+Prod VPC (10.0.0.0/16) ←→ Shared Services VPC (10.1.0.0/16)
+                            ↕
+Dev VPC (10.2.0.0/16)  ←→ Shared Services VPC
+```
+
+### Transit Gateway Hub-And-Spoke
+
+- Use for large number of VPCs (> 10) and a need for **Transitive Routing**/ **Hybrid Connectivity** / Multi-Account.
+- Centralizes routing, transitive routing supported. Scalable with 5000+ VPC attachments.
+- Allows for simplified network topology and Inter-region peering.
+- **Expensive at Scale** ($.05/hour/attachment and $.02/GB data processed)
+
+```txt
+        Transit Gateway
+       /    |    |    \
+      /     |    |     \
+  VPC-A  VPC-B VPC-C  VPN/DX(Direct Connect)
+
+# TGW acts as a cloud router, everything communicates via the TGW  
+```
+
+### VPC Sharing
+
+- **Requires AWS Organizations**.
+- Use for multiple AWS accounts in an **Organization**, or when you want to share Network infrastructure.
+- Centralized network/IP management and optimized cost (less VPCs, share NAT/endpoints).
+
+```txt
+Network Account (Owner)
+  └── Shared VPC
+        ├── Shared to Account A (uses subnets)
+        ├── Shared to Account B (uses subnets)
+        └── Shared to Account C (uses subnets)
+```
+
+
+### Egress VPC (Centralized NAT)
+
+- Use to centralize egress monitoring, **require traffic inspection**, and you want to reduce NAT gateway costs.
+- Can lead to **significant cost reduction** over traditional VPC spread across AZs
+
+```txt
+Transit Gateway
+  ├── Egress VPC (NAT Gateways)
+  ├── Prod VPC → routes to TGW for 0.0.0.0/0
+  └── Dev VPC → routes to TGW for 0.0.0.0/0
+```
+
 ## Security and Access Control
 
 ## Troubleshooting and Examples
 
 ### Check Private DNS
+
+- PrivateDNS is the mechanism that allows AWS PrivateLink to reach services over AWS backbone using DNS.
 
 ```bash
 # Check if private DNS is working
