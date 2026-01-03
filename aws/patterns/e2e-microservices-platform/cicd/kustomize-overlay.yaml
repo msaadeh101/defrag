@@ -1,0 +1,14 @@
+# services/user-service/k8s/overlays/production/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: user-service
+
+bases:
+  - ../../base
+
+images:
+  # This gets updated by CI pipeline or ArgoCD Image Updater
+  - name: placeholder/user-service
+    newName: 123456789012.dkr.ecr.us-east-1.amazonaws.com/user-service
+    newTag: abc123def  # Updated by CI workflow

@@ -1,0 +1,24 @@
+# Instead of individual Application manifests, use an ApplicationSet resource.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: microservices
+spec:
+  generators:
+  - git:
+      repoURL: https://github.com/org/app-teams.git
+      revision: main
+      directories:
+      - path: services/*/k8s/overlays/production
+  template:
+    metadata:
+      name: '{{path.basename}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/org/app-teams.git
+        targetRevision: main
+        path: '{{path}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{path.basename}}'

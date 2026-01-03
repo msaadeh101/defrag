@@ -3,15 +3,151 @@
 ## Overview
 
 ### Node Components 
-- `kubelet`: is an agent that runs on each node of the cluster. It works in terms of a *PodSpec* yaml that describes a pod.
-- a `container runtime` like containerd needs to be installed on each node so pods can run. Needs to conform to CRI (Container Runtime Interface).
-- `kube-proxy`: is the K8s network proxy that runs on each node, it does TCP forwarding to backend services.
+
+#### kubelet
+`kubelet` is the primary node agent that runs on each node of the cluster. It works in terms of a *PodSpec* yaml that describes a pod, making sure the containers in the PodSpec are healthy.
+- Kubelet does NOT create pods, it only runs pods which are assigned to it.
+- Kubelet continuously reconciles *deisred state vs actual state*.
+- If a container crashes, kubelet will restart it based on Pod's restart policy.
+- If kubelet is down, nodes will show `NotReady`, and often workloads won't update if kubelet can't talk to the API server.
+
+**Kubelet Responsibilities**:
+- Registers the node with the cluster.
+- Watches for PodSpecs assigned to the node.
+- Pulls container images.
+- Starts, stops, and restarts containers via *container runtime*.
+- Reports node and pod status back to API server.
+- Executes liveness, readiness, startup probes.
+
+**Common Flags/Configs**:
+- `--container-runtime-endpoint`
+- `--node-ip`
+- `--pod-manifest-path`
+
+
+### Container Runtime
+A `container runtime` like containerd needs to be installed on each node so pods can run. Needs to conform to CRI (Container Runtime Interface).
+- Image Pull failures will be a container runtime issue, not kubernetes logic.
+- Container runtime crashes **only affect that node**, NOT the whole cluster.
+- Use `crictl` to debug these issues.
+
+```txt
+kubelet → CRI → container runtime → OS kernel
+```
+
+**Runtimes**:
+- `containerd` (default in most managed clusters)
+- `CRI-O`
+- `Docker` is **deprecated** as runtime, but *still usable via containerd*
+
+**Runtime Responsibilities**:
+- Pull container images.
+- Create and manage containers.
+- Handle container lifecycle aka start/stop.
+- Manage container isolation (namespaces, cgroup v2)
+
+#### kube-proxy
+`kube-proxy` is the K8s network proxy that runs on each node for service networking, it does TCP forwarding to backend services.
+- kube-proxy enables Service IPs (`ClusterIP`), Load Balancing to backend pods, and NodePort traffic handling.
+- kube-proxy watches services and endpoints from the API server, programs network rules on the node and routes traffic to healthy pods.
+- Kube-proxy does not handle L7 routing, and does not terminate TLS. **kube-proxy only handles L3/L4 traffic**.
+- If kube-proxy fails, services will break but pods may still run.
+- **CNI plugins** like `Calico`, `Cilium` can partially replace or bypass kube-proxy. Advanced setups using `eBPF`, kube-proxy can be fully disabled.
+
+**Modes of Kube-Proxy**:
+- `iptables`: most common and stable.
+- `ipvs`: better performance at scale.
+- `userspace`: legacy.
+
+#### Non-K8 Node Components
+
+##### CNI Plugin
+
+The **CNI Plugin** is a critical node-level component. It assigns IP addresses to pods, sets up pod-to-pod networking, and enfrces network policies.
+- Popular CNIs: `Calico`, `Cilium`, `Flannel`, `AWS CNI`, `Azure CNI`.
+- Every pod gets its own IP, CNI handles routing between nodes.
+- A broken CNI will mean pods are stuck in `ContainerCreating`.
+- NetworkPolicy issues will mostly be related to the CNI, and cloud CNIs can specifically see IP exhaustion.
+
+##### Node OS and Kernel
+
+**Node OS and Kernel** bugs can crash workloads with CPU and memory issues. Use immutable node images and replace nodes instead of patching in place. 
+
+**Responsibilities of the Node OS/Kernel**:
+- Process isolation (`namespaces`)
+- Resource limits (`cgroups`)
+- Networking (`iptables`, `eBPF`)
+- Storage mounts
+
 
 ### Control Plane Components
-- `API Server`: main entrypoint for communication between nodes and control plane. It exposes the K8s api.
-- `Scheduler`: responsible for assigning pods to nodes based on resource availability and requirements of pods.
-- `Controller manager`: runs various controllers that monitor and manage the state of the cluster. i.e. Replication controller ensures desired number of pods for a given deployment.
-- `etcd`: distributed key-value store to store the configuration and state of the cluster. Used by API server and other control plane components to store and retrieve cluster info.
+
+#### API Server (kube-apiserver)
+
+The `API Server` is the front door of the Kubernetes control plane. It is the main entrypoint for communication between nodes and control plane. 
+- Exposes the K8s api.
+- Authenticates and Authorizes requests.
+- **Admission Controllers** validate and mutate objects.
+- Persists cluster state to `etcd` and can be horizontally scaled as they are stateless.
+
+`kubectl`, `kubelet`, `scheduler`, controllers and operators talk to the API server.
+
+```text
+Client → API Server → AuthN/AuthZ → Admission → etcd
+```
+
+**Troubleshooting**:
+- If `kube-apiserver` is down, pods keep running but there is No Scheduling, No Scaling, No Updates.
+- High latency at the kube-apiserver is unsustainable.
+
+#### Scheduler (kube-scheduler)
+
+The `Scheduler` is responsible for assigning pods to nodes based on resource availability and requirements of pods.
+- Only runs for pods without a node assigned.
+- Factors considered include CPU/Memory requests, Taints/Tolerations, Anti-Affinity, Topology spread, cluster resources.
+- Custom Schedulers can coexist with the default scheduler.
+
+```md
+# The scheduling process
+Watches for unscheduled pods
+-> filters nodes
+-> scores nodes
+-> selects node
+-> writes binding back to api server.
+```
+
+#### kube-controller-manager
+
+The `Controller manager` runs various controllers (**control loops**) that monitor and manage the state of the cluster, reconciling the desired state vs actual state.
+- Each controller: watches the API server, compares desired state, takes corrective action.
+- `Deployment`, `ReplicaSet`, `StatefulSet`, `Node`, `Job`, `ServiceAccount`, `Endpoint` are all common controllers.
+- Controllers are **event-driven** and **idempotent**. 
+- Controllers communicate through the API server, as does all communication.
+
+**Troubleshooting**:
+- If controller-manager stops, you will see no scaling, no self-healing, no node failure handling. 
+- Existing pods may continue running.
+
+#### etcd
+
+`etcd` is distributed key-value store to store the configuration and state of the cluster. Used by API server and other control plane components to store and retrieve cluster info.
+- Stored data includes: `Pods`, `Deployments`, `Services`, `ConfigMaps`, `Secrets`, `Nodes`, `CRDs`, `Leases`, `Locks`
+- `etcd` is optimized for small, frequent writes and has strong consistency.
+
+Troubleshooting:
+- etcd performance directly affects API server latency.
+- Disk IOPS and latency matter more than CPU for etcd.
+- Snapshots are the only supported backup mechanism.
+
+#### Cloud Controller Manager
+
+In the Cloud, Kubernetes separates cloud-specific logic into the **Cloud Controller Manager**.
+- Responsibilities include: Node lifecycle, LB provisioning, Route configuration, Volume Attachment and Detachment.
+
+**Examples**:
+- **AWS**: ELB/NLB, EBS
+- **Azure**: Load Balancers, Disks
+- **GCP**: Cloud Load Balancing, Persistent Disks
 
 ### Kubernetes Objects
 
@@ -65,10 +201,10 @@
 
 - `ConfigMap`: Stores non-sensitive key-value pairs injected into pods as env variables or mounted as files.
   - `data`: Can be Key: Value or conf.yml: | syntax
-- `Secret`: Stores sensitive passwords, tokens and keys in base64 encoded format and injects securely into pods.
+- `Secret`: Stores sensitive pass-words, to-kens and key-s in base64 encoded format and injects securely into pods.
   - `Opaque`: Default, generic key-value pairs.
   - `kubernetes.io/dockerconfigjson`: Used for private docker registries. Data key is a `.dockerconfigjson`
-  - `kubernetes.io/basic-auth`: Data keys are `username` and `password`
+  - `kubernetes.io/basic-auth`: Data keys are `user-name` and `pass-word` minus the -
   - `kubernetes.io/tls`: Data keys are `tls.crt` and `tls.key`
   - `kubernetes.io/service-account-token`: Auto-generated token that allows access to API server. Used to mount tokens to pods.
 - `PersistentVolume`: Represents piece of storage in the cluster provisioned by an admin or dynamically with a storage class.
@@ -210,6 +346,16 @@ kubectl cp my-pod-asdhn34324:/usr/share/location/file.txt ~/user/desktop/my-file
 # scale replicaset named foo to 3
 kubectl scale --replicas=3 rs/foo
 ```
+
+### Advanced Topics
+
+#### Pod Eviction (Scheduling) 
+
+- Pods without defined resource requests/limits are assigned a **Quality of Service (QoS)** class of `BestEffort` and are first to be evicted when a node experiences resource pressure or failure. **PDB is not always respected during node pressure eviction**.
+- If a pod exceeds its resource requests, it can be evicted regardless of QoS class. Guaranteed pods can be evicted still be evicted if no lower priority pods exist/only system daemons left.
+- Kubelet monitors node resources (memory, CPU, Disk) and proactively evicts pods if thresholds are exceeded.
+- **Pod Priority** is another factor that influences eviction order, higher priority pods are less likely to be evicted.
+
 
 ### K8s Troubleshooting
 

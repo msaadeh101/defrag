@@ -41,3 +41,21 @@ A Control Tower **Landing Zone** is a governed, multi account environment build 
 - **Gaurdrails (Policies)**: Rules that Control Tower enforces across the accounts.
     - **Preventative**: Implemented via **SCPs** (Service Control Policies) applied at the OU level. They prevent non-compliant actions (i.e. public S3 bucket).
     - **Detective**: Implemented via **AWS Config** rules. Detect non-compliant resources and report status to Control Tower dashboard (i.e. unencrypted EBS volume created)
+
+## Best Practices
+
+### AFT Account Factory For Terraform
+
+**Account Factory for Terrafor (AFT)**: Use caution when bootstrapping Control Tower. Do not provision or upgrade the landing zone / Control Tower service with terraform WITHOUT AFT.
+- You write code terraform for: New account requests (OU, email, SSO settings) and per-account stacks (logging, security, vpcs, etc)
+
+1. **Account Request**: Teams submit new account request via terraform file in Git.
+- Request includes: name, email, OU placement, category (Prod, Dev, Sandbox).
+2. **Account Provisioning Pipeline**: AFT orchestrates the account creation to ensure baseline guardrails.
+- AWS Service Catalog, Step Functions, and Lambda ensure guardrails and OU placement.
+- `AWSAFTExecution` execution role is created in the new account for subsequent customization.
+3. **Cusomtization Pipelines**: Various customizations for the new account.
+- **Global Customizations**: terraform applied to all accounts like S3 access, logging, etc.
+- **Account Customizations**: envrionment-specific terraform code like production guardrails and sandbox budgets.
+- **Provisioning Customizations**: Step Functions/Lambdas for advanced logic (external API calls, custom business logic).
+4. **State Management**: State stored in S3 with DynamoDB locking for safety.

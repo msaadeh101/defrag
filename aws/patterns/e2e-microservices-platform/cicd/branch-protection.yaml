@@ -1,0 +1,20 @@
+# .github/workflows/branch-protection.yaml (via GitHub Settings)
+main:
+  required_status_checks:
+    contexts:
+      - "ci-microservice / build-and-test"
+      - "security-scan / trivy"
+      - "codeql-analysis"
+  required_approving_reviews: 2
+  enforce_admins: false
+  required_pull_request_reviews:
+    dismiss_stale_reviews: true
+    require_code_owner_reviews: true
+
+release/*:
+  # Hotfix branches from main
+  requires_approval: 1
+
+feature/*:
+  # Created from develop, merged via PR to develop
+  automerge_squash: true
