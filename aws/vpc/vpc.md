@@ -233,6 +233,18 @@ You can manage VPC Interface or Gateway Endpoints with policies attached to them
 
 ## Network Design
 
+### General Network Design
+
+```txt
+Internet Gateway
+    ↓
+Network Firewall (Inspection VPC)
+    ↓
+Transit Gateway
+    ↓
+Application VPCs
+```
+
 ### Single VPC Multi-Tier
 
 - Simple architecture/management, low-latency between tiers.
@@ -307,7 +319,109 @@ Transit Gateway
 
 ## Security and Access Control
 
+### Security Groups
+
+- Instance-level firewall.
+- Stateful (return traffic is automatically allowed).
+- All rules are ALLOW rules (no DENY).
+- All rules are evaluated first.
+- Default: Deny all inbound, allow all outbound.
+
+#### Three-Tier Security Groups
+
+```txt
+ALB Security Group:
+  Inbound: 443 from 0.0.0.0/0
+  Outbound: All to App-SG
+
+App Security Group:
+  Inbound: 8080 from ALB-SG
+  Outbound: 3306 to DB-SG
+            443 to VPC Endpoint SG
+
+DB Security Group:
+  Inbound: 3306 from App-SG
+  Outbound: None needed (stateful)
+```
+
+### Network ACL (Stateless)
+
+- Subnet-level firewall.
+- Stateless (must allow return traffic explicitly).
+- Rules evaluated in order, first match wins.
+- ALLOW and DENY rules supported.
+- Default NACL: Allow all inbound/outbound.
+
+#### Private NACL
+
+```txt
+Inbound Rules:
+  100: Allow TCP 443 from 10.0.0.0/16 (HTTPS)
+  110: Allow TCP 22 from 10.0.1.0/24 (SSH from bastion)
+  120: Allow TCP 1024-65535 from 0.0.0.0/0 (Return traffic)
+  *: Deny all
+
+Outbound Rules:
+  100: Allow TCP 443 to 0.0.0.0/0 (HTTPS)
+  110: Allow TCP 3306 to 10.0.21.0/24 (MySQL)
+  120: Allow TCP 1024-65535 to 0.0.0.0/0 (Return traffic)
+  *: Deny all
+```
+
 ## Troubleshooting and Examples
+
+### VPC Flow Logs
+
+Caputres IP traffic metadata flowing to and from network interfaces in the VPC. 
+- Good for security analysis/threat detection/compliance/audititing/cost optimization.
+1. VPC Level: All ENIs in VPC.
+2. Subnet Level: All ENIs in subnet.
+3. ENI Level: Specific ENI only.
+
+- Send to CloudWatch, S3 or Kinsesis Data Firehose.
+
+#### VPC Flow Logs in CloudWatch Insights
+
+```s
+# Top 20 IPs by bytes
+fields @timestamp, srcAddr, dstAddr, bytes
+| sort bytes desc
+| limit 20
+
+# Rejected SSH attempts
+fields @timestamp, srcAddr, dstAddr, srcPort, dstPort
+| filter dstPort = 22 and action = "REJECT"
+
+# Traffic to/from specific IP
+fields @timestamp, srcAddr, dstAddr, srcPort, dstPort, action
+| filter srcAddr = "10.0.1.50" or dstAddr = "10.0.1.50"
+```
+
+
+```bash
+# Default Format:
+${version} ${account-id} ${interface-id} ${srcaddr} ${dstaddr} ${srcport} ${dstport} ${protocol} ${packets} ${bytes} ${start} ${end} ${action} ${log-status}
+
+# Custom Format (example):
+${srcaddr} ${dstaddr} ${srcport} ${dstport} ${protocol} ${action} ${flow-direction}
+```
+
+#### VPC Flow Logs Analysis
+
+```bash
+# Analyze rejected traffic
+aws logs filter-log-events \
+  --log-group-name /aws/vpc/flowlogs \
+  --filter-pattern '[version, account, eni, source, destination, srcport, destport, protocol, packets, bytes, windowstart, windowend, action="REJECT", flowlogstatus]'
+```
+
+### VPC Traffic Mirroring
+
+Copy network traffic from ENIs for monitoring and security analysis, content inspection, and more.
+
+1. **Source**: ENI to mirror
+2. **Target**: ENI or Network Load Balancer
+3. **Filter**: What traffic to mirror
 
 ### Check Private DNS
 
@@ -322,4 +436,42 @@ nslookup s3.us-east-1.amazonaws.com
 # Name:    s3.us-east-1.amazonaws.com
 # Address: 10.0.1.45
 # Address: 10.0.2.67
+```
+
+### Issues Checklist
+
+#### SSH/RDP to Instance
+
+```txt
+Checklist:
+- Instance in public subnet with public IP or EIP?
+- Route table has route to IGW (0.0.0.0/0 → igw-xxx)?
+- Security group allows inbound SSH (22) or RDP (3389)?
+- NACL allows inbound/outbound traffic?
+- Instance has OS-level firewall rules?
+- Key pair correct for SSH?
+- Windows password retrieved for RDP?
+```
+
+#### Private Instance To Internet
+
+```txt
+Checklist:
+- NAT Gateway in public subnet?
+- NAT Gateway has Elastic IP?
+- Private subnet route table has 0.0.0.0/0 → nat-xxx?
+- Security group allows outbound traffic?
+- NACL allows ephemeral ports (1024-65535) inbound?
+```
+
+#### VPC Peering
+
+```txt
+Checklist:
+- Peering connection status is "Active"?
+- Route tables updated on both sides?
+- No overlapping CIDR blocks?
+- Security groups allow traffic from peer VPC?
+- NACLs allow traffic?
+- DNS resolution enabled (if using DNS)?
 ```
